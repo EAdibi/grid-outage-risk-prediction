@@ -14,7 +14,8 @@ def get_db():
     Each team member can use their own credentials
     """
     # Get credentials from environment variables
-    mongo_username = os.getenv("MONGO_USERNAME")
+    # Support both MONGO_USERNAME and MONGO_USER for compatibility
+    mongo_username = os.getenv("MONGO_USERNAME") or os.getenv("MONGO_USER", "fa2927")
     mongo_password = os.getenv("MONGO_PASSWORD")
     mongo_cluster = os.getenv("MONGO_CLUSTER", "cluster0.jphivpd.mongodb.net")
     mongo_database = os.getenv("MONGO_DATABASE", "big_data")

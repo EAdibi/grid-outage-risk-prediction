@@ -1,8 +1,13 @@
+"""Feature Importance Analysis page"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from db import get_db
+
+TITLE = "Feature Importance Analysis"
+ICON = "🔍"
+ORDER = 4
 
 
 def show():

@@ -1,44 +1,32 @@
-import streamlit as st
-import pandas as pd
 import plotly.express as px
-from datetime import datetime
-from db import get_db
+import streamlit as st
+
+from components import metric_row, section_header
+from data import texas_2021_outages
+
+TITLE = "Texas 2021 Case Study"
+ICON = "❄️"
+ORDER = 90
 
 
-def show():
-    st.header("Texas 2021 Winter Storm Case Study")
-    st.markdown(
-        "Actual outages recorded in Texas during the February 2021 winter storm.")
+def show() -> None:
+    section_header(
+        TITLE,
+        "Actual outages recorded in Texas during the February 2021 winter storm.",
+    )
 
-    with st.spinner("Loading data from MongoDB..."):
-        db = get_db()
-        outages = list(db.outages.find({
-            "location.state": "Texas",
-            "start_time": {
-                "$gte": datetime(2021, 2, 1),
-                "$lte": datetime(2021, 2, 28)
-            }
-        }, {
-            "location.county_name": 1,
-            "location.county_fips": 1,
-            "max_customers": 1,
-            "duration_hours": 1,
-            "start_time": 1
-        }))
+    with st.spinner("Loading data..."):
+        df = texas_2021_outages()
 
-    if not outages:
+    if df.empty:
         st.warning("No data found for Texas February 2021.")
         return
 
-    df = pd.DataFrame([{
-        "county": o["location"].get("county_name", "Unknown"),
-        "county_fips": o["location"].get("county_fips", ""),
-        "max_customers": o.get("max_customers", 0),
-        "duration_hours": o.get("duration_hours", 0),
-        "start_time": o.get("start_time")
-    } for o in outages])
-
-    st.subheader(f"Total outage events: {len(df)}")
+    metric_row({
+        "Outage events": f"{len(df):,}",
+        "Counties affected": f"{df['county'].nunique():,}",
+        "Peak customers affected": f"{int(df['max_customers'].max()):,}",
+    })
 
     top = df.groupby("county")["max_customers"].sum() \
             .reset_index() \
@@ -52,7 +40,7 @@ def show():
         title="Customers Affected by County — Texas Feb 2021",
         labels={"max_customers": "Max Customers Affected", "county": "County"},
         color="max_customers",
-        color_continuous_scale="Reds"
+        color_continuous_scale="Reds",
     )
     st.plotly_chart(fig, use_container_width=True)
 
