@@ -1,260 +1,210 @@
+"""
+Model Training for Outage Prediction
+Trains Random Forest, XGBoost, and LightGBM models
+"""
+
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingRegressor
-from xgboost import XGBClassifier, XGBRegressor
-from lightgbm import LGBMClassifier, LGBMRegressor
-from sklearn.metrics import classification_report, mean_squared_error, r2_score, accuracy_score
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, accuracy_score
+import xgboost as xgb
+import lightgbm as lgb
 import joblib
-import os
-import logging
-from datetime import datetime
+from pathlib import Path
+import sys
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Add parent directory to path
+sys.path.append(str(Path(__file__).parent.parent / "app"))
+from db import get_db
 
+print("=" * 70)
+print("MODEL TRAINING FOR OUTAGE PREDICTION")
+print("=" * 70)
 
-class OutageRiskModel:
-    def __init__(self, features_path='features/outage_features.parquet'):
-        self.features_path = features_path
-        self.scaler = StandardScaler()
-        self.label_encoder = LabelEncoder()
-        self.models = {}
-        
-    def load_features(self):
-        """
-        Load engineered features
-        """
-        logger.info(f"Loading features from {self.features_path}")
-        
-        df = pd.read_parquet(self.features_path)
-        
-        logger.info(f"Loaded {len(df)} records with {len(df.columns)} features")
-        return df
-    
-    def prepare_data(self, df, target_col='risk_level', task='classification'):
-        """
-        Prepare data for model training
-        """
-        logger.info("Preparing data for training")
-        
-        feature_cols = [
-            'year', 'month', 'day', 'day_of_week', 'hour', 'quarter', 'is_weekend',
-            'historical_outage_count', 'avg_customers_affected', 'max_customers_affected',
-            'avg_duration_hours', 'max_duration_hours',
-            'weather_event_count', 'avg_weather_magnitude', 'total_property_damage'
-        ]
-        
-        available_features = [col for col in feature_cols if col in df.columns]
-        
-        logger.info(f"Using {len(available_features)} features: {available_features}")
-        
-        X = df[available_features].copy()
-        
-        X = X.fillna(0)
-        
-        if task == 'classification':
-            y = df[target_col].fillna('very_low')
-            y = self.label_encoder.fit_transform(y)
-        else:
-            y = df['risk_score'].fillna(0)
-        
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y if task == 'classification' else None
-        )
-        
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
-        
-        logger.info(f"Training set: {X_train.shape}, Test set: {X_test.shape}")
-        
-        return X_train_scaled, X_test_scaled, y_train, y_test, available_features
-    
-    def train_classification_models(self, X_train, X_test, y_train, y_test):
-        """
-        Train multiple classification models for risk level prediction
-        """
-        logger.info("Training classification models")
-        
-        models = {
-            'random_forest': RandomForestClassifier(
-                n_estimators=100,
-                max_depth=10,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'xgboost': XGBClassifier(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'lightgbm': LGBMClassifier(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                n_jobs=-1,
-                verbose=-1
-            )
-        }
-        
-        results = {}
-        
-        for name, model in models.items():
-            logger.info(f"Training {name}...")
-            
-            model.fit(X_train, y_train)
-            
-            y_pred = model.predict(X_test)
-            
-            accuracy = accuracy_score(y_test, y_pred)
-            
-            results[name] = {
-                'model': model,
-                'accuracy': accuracy,
-                'predictions': y_pred
-            }
-            
-            logger.info(f"{name} - Accuracy: {accuracy:.4f}")
-            
-            print(f"\n{name} Classification Report:")
-            print(classification_report(y_test, y_pred, 
-                                       target_names=self.label_encoder.classes_))
-        
-        return results
-    
-    def train_regression_models(self, X_train, X_test, y_train, y_test):
-        """
-        Train multiple regression models for risk score prediction
-        """
-        logger.info("Training regression models")
-        
-        models = {
-            'gradient_boosting': GradientBoostingRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42
-            ),
-            'xgboost_reg': XGBRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                n_jobs=-1
-            ),
-            'lightgbm_reg': LGBMRegressor(
-                n_estimators=100,
-                max_depth=6,
-                learning_rate=0.1,
-                random_state=42,
-                n_jobs=-1,
-                verbose=-1
-            )
-        }
-        
-        results = {}
-        
-        for name, model in models.items():
-            logger.info(f"Training {name}...")
-            
-            model.fit(X_train, y_train)
-            
-            y_pred = model.predict(X_test)
-            
-            mse = mean_squared_error(y_test, y_pred)
-            rmse = np.sqrt(mse)
-            r2 = r2_score(y_test, y_pred)
-            
-            results[name] = {
-                'model': model,
-                'mse': mse,
-                'rmse': rmse,
-                'r2': r2,
-                'predictions': y_pred
-            }
-            
-            logger.info(f"{name} - RMSE: {rmse:.4f}, R2: {r2:.4f}")
-        
-        return results
-    
-    def get_feature_importance(self, model, feature_names):
-        """
-        Get feature importance from trained model
-        """
-        if hasattr(model, 'feature_importances_'):
-            importance_df = pd.DataFrame({
-                'feature': feature_names,
-                'importance': model.feature_importances_
-            }).sort_values('importance', ascending=False)
-            
-            return importance_df
-        return None
-    
-    def save_models(self, models, output_dir='models'):
-        """
-        Save trained models to disk
-        """
-        logger.info(f"Saving models to {output_dir}")
-        
-        os.makedirs(output_dir, exist_ok=True)
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        for name, result in models.items():
-            model_path = os.path.join(output_dir, f"{name}_{timestamp}.pkl")
-            joblib.dump(result['model'], model_path)
-            logger.info(f"Saved {name} to {model_path}")
-        
-        scaler_path = os.path.join(output_dir, f"scaler_{timestamp}.pkl")
-        joblib.dump(self.scaler, scaler_path)
-        
-        encoder_path = os.path.join(output_dir, f"label_encoder_{timestamp}.pkl")
-        joblib.dump(self.label_encoder, encoder_path)
-        
-        logger.info("All models saved successfully")
-    
-    def run_training_pipeline(self, task='classification'):
-        """
-        Run complete model training pipeline
-        """
-        logger.info(f"Starting model training pipeline (task: {task})")
-        
-        df = self.load_features()
-        
-        X_train, X_test, y_train, y_test, feature_names = self.prepare_data(df, task=task)
-        
-        if task == 'classification':
-            results = self.train_classification_models(X_train, X_test, y_train, y_test)
-        else:
-            results = self.train_regression_models(X_train, X_test, y_train, y_test)
-        
-        best_model_name = max(results.items(), 
-                             key=lambda x: x[1].get('accuracy', x[1].get('r2', 0)))[0]
-        best_model = results[best_model_name]['model']
-        
-        logger.info(f"Best model: {best_model_name}")
-        
-        importance_df = self.get_feature_importance(best_model, feature_names)
-        if importance_df is not None:
-            print("\nTop 10 Most Important Features:")
-            print(importance_df.head(10))
-        
-        self.save_models(results)
-        
-        return results, feature_names
+# Step 1: Load features from MongoDB
+print("\n📊 Step 1: Loading features from MongoDB...")
+db = get_db()
+training_data = list(db.training_data.find())
+print(f"   Loaded {len(training_data):,} records\n")
 
+# Convert to DataFrame
+df = pd.DataFrame(training_data)
 
-if __name__ == "__main__":
-    trainer = OutageRiskModel()
-    
-    print("Training Classification Models...")
-    classification_results, feature_names = trainer.run_training_pipeline(task='classification')
-    
-    print("\n" + "="*80 + "\n")
-    
-    print("Training Regression Models...")
-    regression_results, _ = trainer.run_training_pipeline(task='regression')
+# Step 2: Prepare features and target
+print("🎯 Step 2: Preparing features and target...")
+feature_cols = [
+    'year', 'month', 'day_of_week', 'day_of_year', 'is_weekend', 'season',
+    'avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages',
+    'weather_event_count', 'total_property_damage', 'avg_magnitude', 'total_injuries', 'total_deaths',
+    'latest_population'
+]
+
+X = df[feature_cols]
+y = df['target']
+
+print(f"   Features: {X.shape[1]}")
+print(f"   Samples: {X.shape[0]:,}")
+print(f"   Target distribution:")
+print(f"      No outage (0): {(y == 0).sum():,} ({(y == 0).mean():.1%})")
+print(f"      Outage (1): {(y == 1).sum():,} ({(y == 1).mean():.1%})\n")
+
+# Step 3: Train/Test/Validation Split
+print("✂️  Step 3: Creating train/test/validation splits...")
+# First split: 70% train, 30% temp
+X_train, X_temp, y_train, y_temp = train_test_split(
+    X, y, test_size=0.3, random_state=42, stratify=y
+)
+
+# Second split: 15% test, 15% validation
+X_test, X_val, y_test, y_val = train_test_split(
+    X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp
+)
+
+print(f"   Train: {len(X_train):,} samples ({len(X_train)/len(X):.1%})")
+print(f"   Test:  {len(X_test):,} samples ({len(X_test)/len(X):.1%})")
+print(f"   Val:   {len(X_val):,} samples ({len(X_val)/len(X):.1%})\n")
+
+# Step 4: Train Random Forest
+print("🌲 Step 4: Training Random Forest...")
+rf_model = RandomForestClassifier(
+    n_estimators=100,
+    max_depth=10,
+    min_samples_split=20,
+    random_state=42,
+    n_jobs=-1,
+    class_weight='balanced'
+)
+rf_model.fit(X_train, y_train)
+
+# Evaluate
+y_pred_rf = rf_model.predict(X_test)
+y_prob_rf = rf_model.predict_proba(X_test)[:, 1]
+
+rf_acc = accuracy_score(y_test, y_pred_rf)
+rf_auc = roc_auc_score(y_test, y_prob_rf)
+
+print(f"   Accuracy: {rf_acc:.4f}")
+print(f"   ROC-AUC:  {rf_auc:.4f}")
+
+# Feature importance
+rf_importance = pd.DataFrame({
+    'feature': feature_cols,
+    'importance': rf_model.feature_importances_
+}).sort_values('importance', ascending=False)
+
+print(f"\n   Top 5 Features:")
+for idx, row in rf_importance.head(5).iterrows():
+    print(f"      {row['feature']:30s}: {row['importance']:.4f}")
+print()
+
+# Step 5: Train XGBoost
+print("🚀 Step 5: Training XGBoost...")
+xgb_model = xgb.XGBClassifier(
+    n_estimators=100,
+    max_depth=6,
+    learning_rate=0.1,
+    random_state=42,
+    n_jobs=-1,
+    scale_pos_weight=(y_train == 0).sum() / (y_train == 1).sum()
+)
+xgb_model.fit(X_train, y_train)
+
+# Evaluate
+y_pred_xgb = xgb_model.predict(X_test)
+y_prob_xgb = xgb_model.predict_proba(X_test)[:, 1]
+
+xgb_acc = accuracy_score(y_test, y_pred_xgb)
+xgb_auc = roc_auc_score(y_test, y_prob_xgb)
+
+print(f"   Accuracy: {xgb_acc:.4f}")
+print(f"   ROC-AUC:  {xgb_auc:.4f}\n")
+
+# Step 6: Train LightGBM
+print("💡 Step 6: Training LightGBM...")
+lgb_model = lgb.LGBMClassifier(
+    n_estimators=100,
+    max_depth=6,
+    learning_rate=0.1,
+    random_state=42,
+    n_jobs=-1,
+    class_weight='balanced'
+)
+lgb_model.fit(X_train, y_train)
+
+# Evaluate
+y_pred_lgb = lgb_model.predict(X_test)
+y_prob_lgb = lgb_model.predict_proba(X_test)[:, 1]
+
+lgb_acc = accuracy_score(y_test, y_pred_lgb)
+lgb_auc = roc_auc_score(y_test, y_prob_lgb)
+
+print(f"   Accuracy: {lgb_acc:.4f}")
+print(f"   ROC-AUC:  {lgb_auc:.4f}\n")
+
+# Step 7: Model Comparison
+print("📊 Step 7: Model Comparison")
+print("=" * 70)
+print(f"{'Model':<20} {'Accuracy':<15} {'ROC-AUC':<15}")
+print("-" * 70)
+print(f"{'Random Forest':<20} {rf_acc:<15.4f} {rf_auc:<15.4f}")
+print(f"{'XGBoost':<20} {xgb_acc:<15.4f} {xgb_auc:<15.4f}")
+print(f"{'LightGBM':<20} {lgb_acc:<15.4f} {lgb_auc:<15.4f}")
+print("=" * 70)
+
+# Select best model
+best_model_name = max(
+    [('Random Forest', rf_auc), ('XGBoost', xgb_auc), ('LightGBM', lgb_auc)],
+    key=lambda x: x[1]
+)[0]
+print(f"\n🏆 Best Model: {best_model_name}\n")
+
+# Step 8: Save models
+print("💾 Step 8: Saving models...")
+models_dir = Path(__file__).parent.parent / "models"
+models_dir.mkdir(exist_ok=True)
+
+joblib.dump(rf_model, models_dir / "random_forest.pkl")
+joblib.dump(xgb_model, models_dir / "xgboost.pkl")
+joblib.dump(lgb_model, models_dir / "lightgbm.pkl")
+
+# Save feature importance
+rf_importance.to_csv(models_dir / "feature_importance.csv", index=False)
+
+print(f"   ✅ Saved 3 models to {models_dir}")
+print(f"   ✅ Saved feature importance to feature_importance.csv\n")
+
+# Step 9: Save predictions to MongoDB
+print("💾 Step 9: Saving predictions to MongoDB...")
+# Use best model for predictions
+if best_model_name == 'Random Forest':
+    best_model = rf_model
+elif best_model_name == 'XGBoost':
+    best_model = xgb_model
+else:
+    best_model = lgb_model
+
+# Predict on all data
+y_pred_all = best_model.predict(X)
+y_prob_all = best_model.predict_proba(X)[:, 1]
+
+# Add predictions to dataframe
+df['predicted_outage'] = y_pred_all
+df['outage_probability'] = y_prob_all
+df['model_used'] = best_model_name
+
+# Save to MongoDB
+predictions = df[['county_fips', 'date', 'predicted_outage', 'outage_probability', 'model_used']].to_dict('records')
+db.predictions.delete_many({})
+db.predictions.insert_many(predictions)
+
+print(f"   ✅ Saved {len(predictions):,} predictions to 'predictions' collection\n")
+
+print("=" * 70)
+print("✅ MODEL TRAINING COMPLETE!")
+print("=" * 70)
+print(f"\nModels saved to: {models_dir}")
+print(f"Feature importance saved to: {models_dir / 'feature_importance.csv'}")
+print(f"Predictions saved to MongoDB 'predictions' collection")
+print(f"\nNext: Launch dashboard to see results!")
+print(f"   cd app && streamlit run main.py")

@@ -1,8 +1,9 @@
-"""Feature Importance Analysis page"""
+"""Feature Importance Analysis - Real Data"""
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+from pathlib import Path
 from db import get_db
 
 TITLE = "Feature Importance Analysis"
@@ -11,122 +12,236 @@ ORDER = 4
 
 
 def show():
-    st.header("Feature Importance Analysis")
+    st.header("🔍 Feature Importance Analysis")
     st.markdown("Understanding which factors most strongly predict power outages")
     
-    feature_data = {
-        'Feature': [
-            'Historical Outage Count',
-            'Average Weather Magnitude',
-            'Max Customers Affected (Historical)',
-            'Total Property Damage',
-            'Weather Event Count',
-            'Average Duration Hours',
-            'Month (Seasonal)',
-            'Hour of Day',
-            'Day of Week',
-            'Quarter'
-        ],
-        'Importance': [0.28, 0.22, 0.18, 0.12, 0.08, 0.05, 0.03, 0.02, 0.01, 0.01],
-        'Category': [
-            'Historical', 'Weather', 'Historical', 'Weather', 'Weather',
-            'Historical', 'Temporal', 'Temporal', 'Temporal', 'Temporal'
+    db = get_db()
+    
+    # Check if model has been trained
+    models_dir = Path(__file__).parent.parent.parent / "models"
+    feature_importance_file = models_dir / "feature_importance.csv"
+    
+    if not feature_importance_file.exists():
+        st.warning("⚠️ No trained model found. Please run the ML pipeline first:")
+        st.code("""
+# Run these commands:
+python ml_pipeline/feature_engineering.py
+python ml_pipeline/model_training.py
+        """, language="bash")
+        
+        st.info("📊 Showing correlation analysis from raw data instead...")
+        show_correlation_analysis(db)
+    else:
+        # Show both correlation and model-based importance
+        tab1, tab2, tab3 = st.tabs(["📊 Correlation Analysis", "🤖 Model Feature Importance", "📈 Model Performance"])
+        
+        with tab1:
+            show_correlation_analysis(db)
+        
+        with tab2:
+            show_model_importance(feature_importance_file)
+        
+        with tab3:
+            show_model_performance(db)
+
+
+def show_correlation_analysis(db):
+    """Show correlation between features and outages"""
+    st.subheader("Correlation Analysis (Raw Data)")
+    
+    # Load sample data
+    with st.spinner("Loading data from MongoDB..."):
+        # Get outages with weather and population data
+        pipeline = [
+            {"$match": {"location.county_fips": {"$ne": None}}},
+            {"$sample": {"size": 10000}},
+            {"$project": {
+                "county_fips": "$location.county_fips",
+                "max_customers": 1,
+                "duration_hours": 1,
+                "event_type": 1,
+                "month": {"$month": "$event_began"}
+            }}
         ]
-    }
+        outages = list(db.outages.aggregate(pipeline))
+        
+        if not outages:
+            st.error("No outage data found")
+            return
+        
+        df_outages = pd.DataFrame(outages)
+        
+        # Get weather data
+        weather_pipeline = [
+            {"$match": {"location.county_fips": {"$ne": None}}},
+            {"$group": {
+                "_id": "$location.county_fips",
+                "weather_event_count": {"$sum": 1},
+                "avg_damage": {"$avg": "$damage_property"},
+                "total_injuries": {"$sum": "$injuries"}
+            }}
+        ]
+        weather_agg = list(db.storm_events.aggregate(weather_pipeline))
+        df_weather = pd.DataFrame(weather_agg)
+        df_weather.rename(columns={"_id": "county_fips"}, inplace=True)
+        
+        # Get population
+        population = list(db.county_population.find({}, {"county_fips": 1, "latest_population": 1}))
+        df_pop = pd.DataFrame(population)
+        
+    # Merge data
+    df_merged = df_outages.merge(df_weather, on="county_fips", how="left")
+    df_merged = df_merged.merge(df_pop, on="county_fips", how="left")
+    df_merged = df_merged.fillna(0)
     
-    df = pd.DataFrame(feature_data)
+    # Calculate correlations with outage occurrence
+    numeric_cols = ['max_customers', 'duration_hours', 'month', 'weather_event_count', 
+                    'avg_damage', 'total_injuries', 'latest_population']
     
+    correlations = []
+    for col in numeric_cols:
+        if col in df_merged.columns:
+            # Create binary target (outage occurred)
+            corr = df_merged[col].corr(df_merged['max_customers'] > 0)
+            correlations.append({'Feature': col, 'Correlation': abs(corr)})
+    
+    df_corr = pd.DataFrame(correlations).sort_values('Correlation', ascending=False)
+    
+    # Plot
     col1, col2 = st.columns(2)
     
     with col1:
-        fig_bar = px.bar(
-            df,
-            x='Importance',
+        fig = px.bar(
+            df_corr,
+            x='Correlation',
             y='Feature',
             orientation='h',
-            color='Category',
-            title='Feature Importance Scores',
-            labels={'Importance': 'Importance Score', 'Feature': ''},
-            color_discrete_map={
-                'Historical': '#e74c3c',
-                'Weather': '#3498db',
-                'Temporal': '#2ecc71'
-            }
-        )
-        fig_bar.update_layout(height=500, showlegend=True)
-        st.plotly_chart(fig_bar, use_container_width=True)
-    
-    with col2:
-        category_importance = df.groupby('Category')['Importance'].sum().reset_index()
-        
-        fig_pie = px.pie(
-            category_importance,
-            values='Importance',
-            names='Category',
-            title='Feature Category Distribution',
-            color='Category',
-            color_discrete_map={
-                'Historical': '#e74c3c',
-                'Weather': '#3498db',
-                'Temporal': '#2ecc71'
-            }
-        )
-        fig_pie.update_layout(height=500)
-        st.plotly_chart(fig_pie, use_container_width=True)
-    
-    st.subheader("Key Insights")
-    
-    st.markdown("""
-    **Top Predictive Factors:**
-    
-    1. **Historical Outage Count (28%)**: Counties with frequent past outages are most likely to experience future outages
-    
-    2. **Average Weather Magnitude (22%)**: Severity of weather events is the strongest environmental predictor
-    
-    3. **Max Customers Affected (18%)**: Historical impact scale indicates infrastructure vulnerability
-    
-    4. **Total Property Damage (12%)**: Weather-related damage correlates with grid stress
-    
-    5. **Weather Event Count (8%)**: Frequency of severe weather events in the region
-    """)
-    
-    st.subheader("Model Performance Metrics")
-    
-    metrics_col1, metrics_col2, metrics_col3, metrics_col4 = st.columns(4)
-    
-    with metrics_col1:
-        st.metric("Model Accuracy", "87.3%", "+2.1%")
-    
-    with metrics_col2:
-        st.metric("Precision", "84.6%", "+1.8%")
-    
-    with metrics_col3:
-        st.metric("Recall", "89.2%", "+3.2%")
-    
-    with metrics_col4:
-        st.metric("F1 Score", "86.8%", "+2.5%")
-    
-    st.markdown("---")
-    
-    st.subheader("Feature Correlation Matrix")
-    
-    with st.spinner("Loading correlation data..."):
-        correlation_data = {
-            'Feature 1': ['Historical Outage Count'] * 4,
-            'Feature 2': ['Weather Event Count', 'Max Customers Affected', 'Property Damage', 'Weather Magnitude'],
-            'Correlation': [0.72, 0.68, 0.54, 0.61]
-        }
-        
-        corr_df = pd.DataFrame(correlation_data)
-        
-        fig_corr = px.bar(
-            corr_df,
-            x='Feature 2',
-            y='Correlation',
-            title='Correlation with Historical Outage Count',
-            labels={'Correlation': 'Correlation Coefficient', 'Feature 2': 'Feature'},
+            title="Feature Correlations with Outage Occurrence",
             color='Correlation',
             color_continuous_scale='Reds'
         )
+        fig.update_layout(height=400)
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.metric("Total Outages Analyzed", f"{len(df_outages):,}")
+        st.metric("Counties Covered", f"{df_outages['county_fips'].nunique():,}")
+        st.metric("Avg Customers Affected", f"{df_outages['max_customers'].mean():,.0f}")
         
-        st.plotly_chart(fig_corr, use_container_width=True)
+        st.markdown("**Top Correlating Factors:**")
+        for idx, row in df_corr.head(5).iterrows():
+            st.write(f"- **{row['Feature']}**: {row['Correlation']:.3f}")
+
+
+def show_model_importance(feature_importance_file):
+    """Show feature importance from trained model"""
+    st.subheader("Model-Based Feature Importance")
+    
+    # Load feature importance
+    df_importance = pd.read_csv(feature_importance_file)
+    
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        # Plot feature importance
+        fig = px.bar(
+            df_importance.head(15),
+            x='importance',
+            y='feature',
+            orientation='h',
+            title="Top 15 Most Important Features",
+            color='importance',
+            color_continuous_scale='Viridis'
+        )
+        fig.update_layout(height=500, yaxis={'categoryorder': 'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.markdown("### Feature Categories")
+        
+        # Categorize features
+        temporal = ['year', 'month', 'day_of_week', 'day_of_year', 'is_weekend', 'season']
+        historical = ['avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages']
+        weather = ['weather_event_count', 'total_property_damage', 'avg_magnitude', 'total_injuries', 'total_deaths']
+        demographics = ['latest_population']
+        
+        categories = {
+            'Temporal': df_importance[df_importance['feature'].isin(temporal)]['importance'].sum(),
+            'Historical': df_importance[df_importance['feature'].isin(historical)]['importance'].sum(),
+            'Weather': df_importance[df_importance['feature'].isin(weather)]['importance'].sum(),
+            'Demographics': df_importance[df_importance['feature'].isin(demographics)]['importance'].sum()
+        }
+        
+        fig_pie = px.pie(
+            values=list(categories.values()),
+            names=list(categories.keys()),
+            title="Importance by Category"
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
+        
+        st.markdown("### Top 5 Features")
+        for idx, row in df_importance.head(5).iterrows():
+            st.metric(row['feature'], f"{row['importance']:.4f}")
+
+
+def show_model_performance(db):
+    """Show model performance metrics"""
+    st.subheader("Model Performance")
+    
+    # Load predictions
+    predictions = list(db.predictions.find().limit(1000))
+    
+    if not predictions:
+        st.warning("No predictions found. Run model training first.")
+        return
+    
+    df_pred = pd.DataFrame(predictions)
+    
+    # Load training data for actual values
+    training_data = list(db.training_data.find().limit(1000))
+    df_train = pd.DataFrame(training_data)
+    
+    # Merge
+    df_eval = df_pred.merge(df_train[['county_fips', 'date', 'target']], 
+                            on=['county_fips', 'date'], how='inner')
+    
+    # Calculate metrics
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    
+    accuracy = accuracy_score(df_eval['target'], df_eval['predicted_outage'])
+    precision = precision_score(df_eval['target'], df_eval['predicted_outage'], zero_division=0)
+    recall = recall_score(df_eval['target'], df_eval['predicted_outage'], zero_division=0)
+    f1 = f1_score(df_eval['target'], df_eval['predicted_outage'], zero_division=0)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Accuracy", f"{accuracy:.2%}")
+    col2.metric("Precision", f"{precision:.2%}")
+    col3.metric("Recall", f"{recall:.2%}")
+    col4.metric("F1 Score", f"{f1:.2%}")
+    
+    # Confusion matrix
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(df_eval['target'], df_eval['predicted_outage'])
+    
+    fig = px.imshow(
+        cm,
+        labels=dict(x="Predicted", y="Actual", color="Count"),
+        x=['No Outage', 'Outage'],
+        y=['No Outage', 'Outage'],
+        title="Confusion Matrix",
+        color_continuous_scale='Blues',
+        text_auto=True
+    )
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Probability distribution
+    fig_prob = px.histogram(
+        df_eval,
+        x='outage_probability',
+        color='target',
+        title="Predicted Probability Distribution",
+        labels={'target': 'Actual Outage', 'outage_probability': 'Predicted Probability'},
+        barmode='overlay',
+        nbins=50
+    )
+    st.plotly_chart(fig, use_container_width=True)

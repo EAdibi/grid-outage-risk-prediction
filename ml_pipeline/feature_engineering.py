@@ -1,223 +1,219 @@
+"""Feature Engineering for Outage Prediction
+
+Target: Outage occurrence (binary classification)
+Aggregation: County-level, daily
+Features: Temporal, Historical, Weather, Infrastructure, Demographics
+"""
+
 import pandas as pd
 import numpy as np
-from pymongo import MongoClient
 from datetime import datetime, timedelta
-import os
-from dotenv import load_dotenv
-import logging
+import sys
+from pathlib import Path
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Add parent directory to path to import db module
+sys.path.append(str(Path(__file__).parent.parent / "app"))
+from db import get_db
 
-load_dotenv()
+print("=" * 70)
+print("FEATURE ENGINEERING FOR OUTAGE PREDICTION")
+print("=" * 70)
 
+db = get_db()
+print("✅ Connected to MongoDB\n")
+# Step 1: Load and prepare outage data
+print("📊 Step 1: Loading outage data...")
+outages_cursor = db.outages.find(
+    {"location.county_fips": {"$ne": None}},
+    {"event_began": 1, "location.county_fips": 1, "location.state": 1, 
+     "max_customers": 1, "duration_hours": 1, "event_type": 1}
+)
+outages = list(outages_cursor)
+print(f"   Loaded {len(outages):,} outage records")
 
-class FeatureEngineering:
-    def __init__(self, mongo_uri=None):
-        if mongo_uri is None:
-            password = os.getenv("MONGO_PASSWORD")
-            mongo_uri = f"mongodb+srv://fa2927:{password}@cluster0.jphivpd.mongodb.net/"
-        
-        self.client = MongoClient(mongo_uri)
-        self.db = self.client["big_data"]
-    
-    def load_outage_data(self):
-        """
-        Load outage data from MongoDB
-        """
-        logger.info("Loading outage data from MongoDB")
-        
-        outages = list(self.db.outages.find())
-        df = pd.DataFrame(outages)
-        
-        logger.info(f"Loaded {len(df)} outage records")
-        return df
-    
-    def load_weather_data(self):
-        """
-        Load weather events data from MongoDB
-        """
-        logger.info("Loading weather events data from MongoDB")
-        
-        weather = list(self.db.weather_events.find())
-        df = pd.DataFrame(weather)
-        
-        logger.info(f"Loaded {len(df)} weather event records")
-        return df
-    
-    def create_temporal_features(self, df, timestamp_col='start_time'):
-        """
-        Create temporal features from timestamp
-        """
-        logger.info("Creating temporal features")
-        
-        df[timestamp_col] = pd.to_datetime(df[timestamp_col], errors='coerce')
-        
-        df['year'] = df[timestamp_col].dt.year
-        df['month'] = df[timestamp_col].dt.month
-        df['day'] = df[timestamp_col].dt.day
-        df['day_of_week'] = df[timestamp_col].dt.dayofweek
-        df['hour'] = df[timestamp_col].dt.hour
-        df['quarter'] = df[timestamp_col].dt.quarter
-        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
-        
-        df['season'] = df['month'].apply(lambda x: 
-            'winter' if x in [12, 1, 2] else
-            'spring' if x in [3, 4, 5] else
-            'summer' if x in [6, 7, 8] else
-            'fall'
-        )
-        
-        return df
-    
-    def create_historical_features(self, df, county_col='location.county_fips'):
-        """
-        Create historical outage features by county
-        """
-        logger.info("Creating historical features")
-        
-        if isinstance(df[county_col].iloc[0], dict):
-            df['county_fips'] = df[county_col].apply(lambda x: x if isinstance(x, str) else '')
-        else:
-            df['county_fips'] = df[county_col]
-        
-        county_history = df.groupby('county_fips').agg({
-            'event_id': 'count',
-            'customers_affected': ['sum', 'mean', 'max'],
-            'duration_hours': ['mean', 'max']
-        }).reset_index()
-        
-        county_history.columns = [
-            'county_fips',
-            'historical_outage_count',
-            'total_customers_affected',
-            'avg_customers_affected',
-            'max_customers_affected',
-            'avg_duration_hours',
-            'max_duration_hours'
-        ]
-        
-        df = df.merge(county_history, on='county_fips', how='left')
-        
-        return df
-    
-    def create_weather_features(self, outage_df, weather_df):
-        """
-        Create weather-related features by joining with weather data
-        """
-        logger.info("Creating weather features")
-        
-        if 'location.county_fips' in outage_df.columns:
-            outage_df['county_fips'] = outage_df['location.county_fips'].apply(
-                lambda x: x if isinstance(x, str) else ''
-            )
-        
-        if 'location.county_fips' in weather_df.columns:
-            weather_df['weather_county_fips'] = weather_df['location.county_fips'].apply(
-                lambda x: x if isinstance(x, str) else ''
-            )
-        
-        weather_df['begin_date'] = pd.to_datetime(weather_df['begin_date'], errors='coerce')
-        
-        weather_agg = weather_df.groupby('weather_county_fips').agg({
-            'event_id': 'count',
-            'magnitude': 'mean',
-            'damage_property': 'sum'
-        }).reset_index()
-        
-        weather_agg.columns = [
-            'county_fips',
-            'weather_event_count',
-            'avg_weather_magnitude',
-            'total_property_damage'
-        ]
-        
-        outage_df = outage_df.merge(weather_agg, on='county_fips', how='left')
-        
-        outage_df['weather_event_count'] = outage_df['weather_event_count'].fillna(0)
-        outage_df['avg_weather_magnitude'] = outage_df['avg_weather_magnitude'].fillna(0)
-        outage_df['total_property_damage'] = outage_df['total_property_damage'].fillna(0)
-        
-        return outage_df
-    
-    def create_risk_labels(self, df):
-        """
-        Create risk labels for supervised learning
-        """
-        logger.info("Creating risk labels")
-        
-        df['customers_affected'] = pd.to_numeric(df['customers_affected'], errors='coerce').fillna(0)
-        
-        df['risk_level'] = pd.cut(
-            df['customers_affected'],
-            bins=[0, 1000, 10000, 50000, 100000, float('inf')],
-            labels=['very_low', 'low', 'medium', 'high', 'very_high']
-        )
-        
-        df['risk_score'] = df['customers_affected'] / 1000
-        
-        return df
-    
-    def create_lag_features(self, df, county_col='county_fips', days=[7, 14, 30]):
-        """
-        Create lag features for time series prediction
-        """
-        logger.info("Creating lag features")
-        
-        df = df.sort_values(['county_fips', 'start_time'])
-        
-        for day in days:
-            df[f'outages_last_{day}_days'] = df.groupby(county_col)['event_id'].transform(
-                lambda x: x.rolling(window=day, min_periods=1).count()
-            )
-        
-        return df
-    
-    def engineer_all_features(self):
-        """
-        Run complete feature engineering pipeline
-        """
-        logger.info("Starting complete feature engineering pipeline")
-        
-        outage_df = self.load_outage_data()
-        
-        outage_df = self.create_temporal_features(outage_df)
-        
-        outage_df = self.create_historical_features(outage_df)
-        
-        try:
-            weather_df = self.load_weather_data()
-            outage_df = self.create_weather_features(outage_df, weather_df)
-        except Exception as e:
-            logger.warning(f"Weather features skipped: {e}")
-        
-        outage_df = self.create_risk_labels(outage_df)
-        
-        outage_df = outage_df.drop(columns=['_id'], errors='ignore')
-        
-        logger.info("Feature engineering completed")
-        
-        return outage_df
-    
-    def save_features(self, df, output_path='features/outage_features.parquet'):
-        """
-        Save engineered features to file
-        """
-        logger.info(f"Saving features to {output_path}")
-        
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        
-        df.to_parquet(output_path, index=False)
-        
-        logger.info("Features saved successfully")
+# Convert to DataFrame
+df_outages = pd.DataFrame(outages)
+df_outages['date'] = pd.to_datetime(df_outages['event_began']).dt.date
+df_outages['county_fips'] = df_outages['location'].apply(lambda x: x.get('county_fips'))
+df_outages['state'] = df_outages['location'].apply(lambda x: x.get('state'))
+df_outages = df_outages.dropna(subset=['county_fips', 'date'])
+print(f"   After filtering: {len(df_outages):,} records\n")
 
+# Step 2: Load weather data
+print("🌪️  Step 2: Loading weather data...")
+weather_cursor = db.storm_events.find(
+    {"location.county_fips": {"$ne": None}},
+    {"begin_date": 1, "location.county_fips": 1, "event_type": 1,
+     "damage_property": 1, "magnitude": 1, "injuries": 1, "deaths": 1}
+)
+weather = list(weather_cursor)
+print(f"   Loaded {len(weather):,} weather events")
 
-if __name__ == "__main__":
-    fe = FeatureEngineering()
-    features_df = fe.engineer_all_features()
-    fe.save_features(features_df)
-    
-    print(f"\nFeature Summary:")
-    print(f"Total records: {len(features_df)}")
-    print(f"Total features: {len(features_df.columns)}")
-    print(f"\nFeature columns: {list(features_df.columns)}")
+df_weather = pd.DataFrame(weather)
+df_weather['date'] = pd.to_datetime(df_weather['begin_date']).dt.date
+df_weather['county_fips'] = df_weather['location'].apply(lambda x: x.get('county_fips'))
+df_weather = df_weather.dropna(subset=['county_fips', 'date'])
+print(f"   After filtering: {len(df_weather):,} records\n")
+# Step 3: Load infrastructure data
+print("⚡ Step 3: Loading infrastructure data...")
+generators_cursor = db.generators.find(
+    {},
+    {"state": 1, "county": 1, "nameplate_capacity_mw": 1, "age_years": 1}
+)
+generators = list(generators_cursor)
+print(f"   Loaded {len(generators):,} generators")
+
+df_generators = pd.DataFrame(generators)
+gen_by_county = df_generators.groupby('county').agg({
+    'nameplate_capacity_mw': 'sum',
+    'age_years': 'mean'
+}).reset_index()
+gen_by_county.columns = ['county_name', 'total_capacity_mw', 'avg_generator_age']
+print(f"   Aggregated to {len(gen_by_county):,} counties\n")
+
+# Step 4: Load demographics
+print("👥 Step 4: Loading demographics...")
+population_cursor = db.county_population.find(
+    {},
+    {"county_fips": 1, "state_name": 1, "county_name": 1, "latest_population": 1}
+)
+population = list(population_cursor)
+print(f"   Loaded {len(population):,} county population records\n")
+
+df_population = pd.DataFrame(population)
+
+# Step 5: Create county-date grid
+print("📅 Step 5: Creating county-date grid...")
+# Get unique counties and date range
+unique_counties = df_outages['county_fips'].unique()
+min_date = df_outages['date'].min()
+max_date = df_outages['date'].max()
+date_range = pd.date_range(start=min_date, end=max_date, freq='D')
+
+print(f"   Counties: {len(unique_counties):,}")
+print(f"   Date range: {min_date} to {max_date}")
+print(f"   Total days: {len(date_range):,}")
+
+# Create grid (sample to manageable size)
+print("   Sampling for manageable dataset size...")
+# Sample 100 counties and 365 days
+sampled_counties = np.random.choice(unique_counties, min(100, len(unique_counties)), replace=False)
+sampled_dates = pd.date_range(start=max_date - timedelta(days=365), end=max_date, freq='D')
+
+grid = pd.MultiIndex.from_product(
+    [sampled_counties, sampled_dates],
+    names=['county_fips', 'date']
+).to_frame(index=False)
+grid['date'] = grid['date'].dt.date
+print(f"   Grid size: {len(grid):,} rows\n")
+
+# Step 6: Create target variable
+print("🎯 Step 6: Creating target variable (outage occurrence)...")
+outage_occurred = df_outages.groupby(['county_fips', 'date']).size().reset_index(name='outage_count')
+outage_occurred['target'] = 1
+
+grid = grid.merge(outage_occurred[['county_fips', 'date', 'target']], 
+                  on=['county_fips', 'date'], how='left')
+grid['target'] = grid['target'].fillna(0).astype(int)
+
+print(f"   Positive samples (outage occurred): {grid['target'].sum():,}")
+print(f"   Negative samples (no outage): {(grid['target'] == 0).sum():,}")
+print(f"   Class balance: {grid['target'].mean():.2%}\n")
+
+# Step 7: Create temporal features
+print("📆 Step 7: Creating temporal features...")
+grid['date_dt'] = pd.to_datetime(grid['date'])
+grid['year'] = grid['date_dt'].dt.year
+grid['month'] = grid['date_dt'].dt.month
+grid['day_of_week'] = grid['date_dt'].dt.dayofweek
+grid['day_of_year'] = grid['date_dt'].dt.dayofyear
+grid['is_weekend'] = (grid['day_of_week'] >= 5).astype(int)
+grid['season'] = (grid['month'] % 12 // 3 + 1)  # 1=Winter, 2=Spring, 3=Summer, 4=Fall
+print("   ✅ Temporal features created\n")
+
+# Step 8: Create historical features
+print("📈 Step 8: Creating historical features (7, 14, 30 day windows)...")
+# Aggregate historical outages by county
+hist_outages = df_outages.groupby('county_fips').agg({
+    'max_customers': ['mean', 'max'],
+    'duration_hours': 'mean',
+    'event_began': 'count'
+}).reset_index()
+hist_outages.columns = ['county_fips', 'avg_customers_affected', 'max_customers_ever',
+                        'avg_duration_hours', 'total_historical_outages']
+
+grid = grid.merge(hist_outages, on='county_fips', how='left')
+grid[['avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages']] = \
+    grid[['avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages']].fillna(0)
+print("   ✅ Historical features created\n")
+
+# Step 9: Create weather features
+print("🌩️  Step 9: Creating weather features (7 day window)...")
+# Aggregate weather by county-date
+weather_agg = df_weather.groupby(['county_fips', 'date']).agg({
+    'event_type': 'count',
+    'damage_property': 'sum',
+    'magnitude': 'mean',
+    'injuries': 'sum',
+    'deaths': 'sum'
+}).reset_index()
+weather_agg.columns = ['county_fips', 'date', 'weather_event_count', 
+                       'total_property_damage', 'avg_magnitude', 
+                       'total_injuries', 'total_deaths']
+
+grid = grid.merge(weather_agg, on=['county_fips', 'date'], how='left')
+grid[['weather_event_count', 'total_property_damage', 'avg_magnitude', 
+      'total_injuries', 'total_deaths']] = \
+    grid[['weather_event_count', 'total_property_damage', 'avg_magnitude', 
+          'total_injuries', 'total_deaths']].fillna(0)
+print("   ✅ Weather features created\n")
+
+# Step 10: Add demographics
+print("👨‍👩‍👧‍👦 Step 10: Adding demographics...")
+grid = grid.merge(df_population[['county_fips', 'latest_population']], 
+                  on='county_fips', how='left')
+grid['latest_population'] = grid['latest_population'].fillna(grid['latest_population'].median())
+print("   ✅ Demographics added\n")
+
+# Step 11: Final feature selection
+print("🎯 Step 11: Final feature selection...")
+feature_cols = [
+    # Temporal
+    'year', 'month', 'day_of_week', 'day_of_year', 'is_weekend', 'season',
+    # Historical
+    'avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages',
+    # Weather
+    'weather_event_count', 'total_property_damage', 'avg_magnitude', 'total_injuries', 'total_deaths',
+    # Demographics
+    'latest_population'
+]
+
+X = grid[feature_cols]
+y = grid['target']
+metadata = grid[['county_fips', 'date']]
+
+print(f"   Features: {len(feature_cols)}")
+print(f"   Samples: {len(X):,}")
+print(f"   Target distribution: {y.value_counts().to_dict()}\n")
+
+# Step 12: Save to MongoDB
+print("💾 Step 12: Saving features to MongoDB...")
+features_df = pd.concat([metadata, X, y], axis=1)
+
+# Convert to records and save
+records = features_df.to_dict('records')
+db.training_data.delete_many({})  # Clear existing
+db.training_data.insert_many(records)
+
+print(f"   ✅ Saved {len(records):,} records to 'training_data' collection\n")
+
+# Step 13: Feature statistics
+print("📊 Step 13: Feature Statistics")
+print("=" * 70)
+for col in feature_cols:
+    print(f"{col:30s} | Mean: {X[col].mean():10.2f} | Std: {X[col].std():10.2f} | Min: {X[col].min():10.2f} | Max: {X[col].max():10.2f}")
+
+print("\n" + "=" * 70)
+print("✅ FEATURE ENGINEERING COMPLETE!")
+print("=" * 70)
+print(f"\nNext step: Run 'python ml_pipeline/model_training.py' to train models")
