@@ -13,7 +13,9 @@ st.sidebar.title("Navigation")
 page = st.sidebar.radio("Go to", [
     "Vulnerability Map",
     "Top 10 High-Risk Counties",
-    "Texas 2021 Case Study"
+    "Texas 2021 Case Study",
+    "Feature Importance Analysis",
+    "Comparative Analysis"
 ])
 
 if page == "Vulnerability Map":
@@ -24,4 +26,10 @@ elif page == "Top 10 High-Risk Counties":
     show()
 elif page == "Texas 2021 Case Study":
     from sections.texas_2021 import show
+    show()
+elif page == "Feature Importance Analysis":
+    from sections.feature_importance import show
+    show()
+elif page == "Comparative Analysis":
+    from sections.comparative_analysis import show
     show()
