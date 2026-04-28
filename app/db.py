@@ -7,8 +7,8 @@ load_dotenv(Path(__file__).parent / ".env")
 
 
 def get_db():
+    user = os.getenv("MONGO_USER", "fa2927")
     password = os.getenv("MONGO_PASSWORD")
-    uri = f"mongodb+srv://fa2927:{password}@cluster0.jphivpd.mongodb.net/"
+    uri = f"mongodb+srv://{user}:{password}@cluster0.jphivpd.mongodb.net/"
     client = MongoClient(uri)
-    db = client["big_data"]
-    return db
+    return client["big_data"]
