@@ -7,12 +7,15 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, accuracy_score
+from sklearn.metrics import classification_report, confusion_matrix, roc_auc_score, accuracy_score, precision_score, recall_score, f1_score
 import xgboost as xgb
 import lightgbm as lgb
 import joblib
 from pathlib import Path
 import sys
+from imblearn.over_sampling import SMOTE
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.pipeline import Pipeline as ImbPipeline
 
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent / "app"))
@@ -63,29 +66,52 @@ X_test, X_val, y_test, y_val = train_test_split(
 
 print(f"   Train: {len(X_train):,} samples ({len(X_train)/len(X):.1%})")
 print(f"   Test:  {len(X_test):,} samples ({len(X_test)/len(X):.1%})")
-print(f"   Val:   {len(X_val):,} samples ({len(X_val)/len(X):.1%})\n")
+print(f"   Val:   {len(X_val):,} samples ({len(X_val)/len(X):.1%})")
+print(f"   Train class distribution: {y_train.value_counts().to_dict()}\n")
+
+# Step 3b: Handle Class Imbalance with SMOTE + Undersampling
+print("⚖️  Step 3b: Handling class imbalance with SMOTE...")
+print(f"   Original train distribution: 0={len(y_train[y_train==0]):,}, 1={len(y_train[y_train==1]):,}")
+
+# Combine SMOTE (oversample minority) + RandomUnderSampler (undersample majority)
+# Target: 30% positive class (more balanced than original 1.5%)
+smote = SMOTE(sampling_strategy=0.3, random_state=42)  # Oversample to 30% of majority
+under = RandomUnderSampler(sampling_strategy=0.5, random_state=42)  # Then undersample to 50/50
+
+X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+X_train_balanced, y_train_balanced = under.fit_resample(X_train_balanced, y_train_balanced)
+
+print(f"   Balanced train distribution: 0={len(y_train_balanced[y_train_balanced==0]):,}, 1={len(y_train_balanced[y_train_balanced==1]):,}")
+print(f"   New class balance: {len(y_train_balanced[y_train_balanced==1])/len(y_train_balanced):.1%} positive\n")
 
 # Step 4: Train Random Forest
-print("🌲 Step 4: Training Random Forest...")
+print("🌲 Step 4: Training Random Forest on balanced data...")
 rf_model = RandomForestClassifier(
-    n_estimators=100,
-    max_depth=10,
-    min_samples_split=20,
+    n_estimators=200,
+    max_depth=15,
+    min_samples_split=10,
+    min_samples_leaf=5,
     random_state=42,
     n_jobs=-1,
-    class_weight='balanced'
+    class_weight=None  # Already balanced with SMOTE
 )
-rf_model.fit(X_train, y_train)
+rf_model.fit(X_train_balanced, y_train_balanced)
 
-# Evaluate
+# Evaluate on original test set
 y_pred_rf = rf_model.predict(X_test)
 y_prob_rf = rf_model.predict_proba(X_test)[:, 1]
 
 rf_acc = accuracy_score(y_test, y_pred_rf)
+rf_precision = precision_score(y_test, y_pred_rf, zero_division=0)
+rf_recall = recall_score(y_test, y_pred_rf, zero_division=0)
+rf_f1 = f1_score(y_test, y_pred_rf, zero_division=0)
 rf_auc = roc_auc_score(y_test, y_prob_rf)
 
-print(f"   Accuracy: {rf_acc:.4f}")
-print(f"   ROC-AUC:  {rf_auc:.4f}")
+print(f"   Accuracy:  {rf_acc:.4f}")
+print(f"   Precision: {rf_precision:.4f}")
+print(f"   Recall:    {rf_recall:.4f}")
+print(f"   F1 Score:  {rf_f1:.4f}")
+print(f"   ROC-AUC:   {rf_auc:.4f}")
 
 # Feature importance
 rf_importance = pd.DataFrame({
@@ -99,65 +125,83 @@ for idx, row in rf_importance.head(5).iterrows():
 print()
 
 # Step 5: Train XGBoost
-print("🚀 Step 5: Training XGBoost...")
+print("🚀 Step 5: Training XGBoost on balanced data...")
 xgb_model = xgb.XGBClassifier(
-    n_estimators=100,
-    max_depth=6,
-    learning_rate=0.1,
+    n_estimators=200,
+    max_depth=8,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
     random_state=42,
     n_jobs=-1,
-    scale_pos_weight=(y_train == 0).sum() / (y_train == 1).sum()
+    scale_pos_weight=1  # Already balanced with SMOTE
 )
-xgb_model.fit(X_train, y_train)
+xgb_model.fit(X_train_balanced, y_train_balanced)
 
-# Evaluate
+# Evaluate on original test set
 y_pred_xgb = xgb_model.predict(X_test)
 y_prob_xgb = xgb_model.predict_proba(X_test)[:, 1]
 
 xgb_acc = accuracy_score(y_test, y_pred_xgb)
+xgb_precision = precision_score(y_test, y_pred_xgb, zero_division=0)
+xgb_recall = recall_score(y_test, y_pred_xgb, zero_division=0)
+xgb_f1 = f1_score(y_test, y_pred_xgb, zero_division=0)
 xgb_auc = roc_auc_score(y_test, y_prob_xgb)
 
-print(f"   Accuracy: {xgb_acc:.4f}")
-print(f"   ROC-AUC:  {xgb_auc:.4f}\n")
+print(f"   Accuracy:  {xgb_acc:.4f}")
+print(f"   Precision: {xgb_precision:.4f}")
+print(f"   Recall:    {xgb_recall:.4f}")
+print(f"   F1 Score:  {xgb_f1:.4f}")
+print(f"   ROC-AUC:   {xgb_auc:.4f}\n")
 
 # Step 6: Train LightGBM
-print("💡 Step 6: Training LightGBM...")
+print("💡 Step 6: Training LightGBM on balanced data...")
 lgb_model = lgb.LGBMClassifier(
-    n_estimators=100,
-    max_depth=6,
-    learning_rate=0.1,
+    n_estimators=200,
+    max_depth=8,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
     random_state=42,
     n_jobs=-1,
-    class_weight='balanced'
+    class_weight=None,  # Already balanced with SMOTE
+    verbose=-1
 )
-lgb_model.fit(X_train, y_train)
+lgb_model.fit(X_train_balanced, y_train_balanced)
 
-# Evaluate
+# Evaluate on original test set
 y_pred_lgb = lgb_model.predict(X_test)
 y_prob_lgb = lgb_model.predict_proba(X_test)[:, 1]
 
 lgb_acc = accuracy_score(y_test, y_pred_lgb)
+lgb_precision = precision_score(y_test, y_pred_lgb, zero_division=0)
+lgb_recall = recall_score(y_test, y_pred_lgb, zero_division=0)
+lgb_f1 = f1_score(y_test, y_pred_lgb, zero_division=0)
 lgb_auc = roc_auc_score(y_test, y_prob_lgb)
 
-print(f"   Accuracy: {lgb_acc:.4f}")
-print(f"   ROC-AUC:  {lgb_auc:.4f}\n")
+print(f"   Accuracy:  {lgb_acc:.4f}")
+print(f"   Precision: {lgb_precision:.4f}")
+print(f"   Recall:    {lgb_recall:.4f}")
+print(f"   F1 Score:  {lgb_f1:.4f}")
+print(f"   ROC-AUC:   {lgb_auc:.4f}\n")
 
 # Step 7: Model Comparison
 print("📊 Step 7: Model Comparison")
-print("=" * 70)
-print(f"{'Model':<20} {'Accuracy':<15} {'ROC-AUC':<15}")
-print("-" * 70)
-print(f"{'Random Forest':<20} {rf_acc:<15.4f} {rf_auc:<15.4f}")
-print(f"{'XGBoost':<20} {xgb_acc:<15.4f} {xgb_auc:<15.4f}")
-print(f"{'LightGBM':<20} {lgb_acc:<15.4f} {lgb_auc:<15.4f}")
-print("=" * 70)
+print("=" * 100)
+print(f"{'Model':<15} {'Accuracy':<12} {'Precision':<12} {'Recall':<12} {'F1':<12} {'ROC-AUC':<12}")
+print("-" * 100)
+print(f"{'Random Forest':<15} {rf_acc:<12.4f} {rf_precision:<12.4f} {rf_recall:<12.4f} {rf_f1:<12.4f} {rf_auc:<12.4f}")
+print(f"{'XGBoost':<15} {xgb_acc:<12.4f} {xgb_precision:<12.4f} {xgb_recall:<12.4f} {xgb_f1:<12.4f} {xgb_auc:<12.4f}")
+print(f"{'LightGBM':<15} {lgb_acc:<12.4f} {lgb_precision:<12.4f} {lgb_recall:<12.4f} {lgb_f1:<12.4f} {lgb_auc:<12.4f}")
+print("=" * 100)
 
-# Select best model
+# Select best model based on F1 score (better for imbalanced data than accuracy)
 best_model_name = max(
-    [('Random Forest', rf_auc), ('XGBoost', xgb_auc), ('LightGBM', lgb_auc)],
+    [('Random Forest', rf_f1), ('XGBoost', xgb_f1), ('LightGBM', lgb_f1)],
     key=lambda x: x[1]
 )[0]
-print(f"\n🏆 Best Model: {best_model_name}\n")
+print(f"\n🏆 Best Model (by F1 Score): {best_model_name}")
+print(f"   Note: F1 score is better than accuracy for imbalanced datasets\n")
 
 # Step 8: Save models
 print("💾 Step 8: Saving models...")
