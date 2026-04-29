@@ -74,9 +74,9 @@ print("⚖️  Step 3b: Handling class imbalance with SMOTE...")
 print(f"   Original train distribution: 0={len(y_train[y_train==0]):,}, 1={len(y_train[y_train==1]):,}")
 
 # Combine SMOTE (oversample minority) + RandomUnderSampler (undersample majority)
-# Target: 30% positive class (more balanced than original 1.5%)
-smote = SMOTE(sampling_strategy=0.3, random_state=42)  # Oversample to 30% of majority
-under = RandomUnderSampler(sampling_strategy=0.5, random_state=42)  # Then undersample to 50/50
+# Target: 50/50 balance for better precision
+smote = SMOTE(sampling_strategy=1.0, random_state=42)  # Oversample to match majority
+under = RandomUnderSampler(sampling_strategy=1.0, random_state=42)  # Keep 50/50 balance
 
 X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
 X_train_balanced, y_train_balanced = under.fit_resample(X_train_balanced, y_train_balanced)
