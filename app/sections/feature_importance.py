@@ -201,8 +201,18 @@ def show_model_performance(db):
     """Show model performance metrics"""
     st.subheader("Model Performance")
     
+    # Load training data with actual targets
+    with st.spinner("Loading test data..."):
+        training_data = list(db.training_data.find())
+    
+    if not training_data:
+        st.warning("No training data found. Run feature engineering first.")
+        return
+    
+    df_train = pd.DataFrame(training_data)
+    
     # Load predictions
-    predictions = list(db.predictions.find().limit(1000))
+    predictions = list(db.predictions.find())
     
     if not predictions:
         st.warning("No predictions found. Run model training first.")
@@ -210,33 +220,52 @@ def show_model_performance(db):
     
     df_pred = pd.DataFrame(predictions)
     
-    # Load training data for actual values
-    training_data = list(db.training_data.find().limit(1000))
-    df_train = pd.DataFrame(training_data)
+    # Show which model was used
+    if 'model_used' in df_pred.columns:
+        model_name = df_pred['model_used'].iloc[0]
+        st.info(f"📊 Showing performance for: **{model_name}**")
     
-    # Merge
-    df_eval = df_pred.merge(df_train[['county_fips', 'date', 'target']], 
-                            on=['county_fips', 'date'], how='inner')
+    # Use the predictions directly (they already have targets from training)
+    # Split into train/test like in model_training.py (15% test)
+    from sklearn.model_selection import train_test_split
+    
+    X = df_train.drop(['_id', 'county_fips', 'date', 'target'], axis=1, errors='ignore')
+    y = df_train['target']
+    
+    # Same split as training (70/15/15)
+    _, X_temp, _, y_temp = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
+    _, _, _, y_test = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)
+    
+    # Get corresponding predictions for test set
+    test_indices = y_test.index
+    y_pred = df_pred.loc[test_indices, 'predicted_outage'].values
+    y_prob = df_pred.loc[test_indices, 'outage_probability'].values
+    y_true = y_test.values
     
     # Calculate metrics
-    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+    from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score
     
-    accuracy = accuracy_score(df_eval['target'], df_eval['predicted_outage'])
-    precision = precision_score(df_eval['target'], df_eval['predicted_outage'], zero_division=0)
-    recall = recall_score(df_eval['target'], df_eval['predicted_outage'], zero_division=0)
-    f1 = f1_score(df_eval['target'], df_eval['predicted_outage'], zero_division=0)
+    accuracy = accuracy_score(y_true, y_pred)
+    precision = precision_score(y_true, y_pred, zero_division=0)
+    recall = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+    roc_auc = roc_auc_score(y_true, y_prob)
     
-    col1, col2, col3, col4 = st.columns(4)
+    st.markdown(f"**Test Set Size:** {len(y_test):,} samples ({len(y_test)/len(y)*100:.1f}% of data)")
+    st.markdown(f"**Positive samples in test:** {y_true.sum():,} ({y_true.sum()/len(y_true)*100:.1f}%)")
+    
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Accuracy", f"{accuracy:.2%}")
     col2.metric("Precision", f"{precision:.2%}")
     col3.metric("Recall", f"{recall:.2%}")
     col4.metric("F1 Score", f"{f1:.2%}")
+    col5.metric("ROC-AUC", f"{roc_auc:.2%}")
     
     # Confusion matrix
     from sklearn.metrics import confusion_matrix
     import plotly.graph_objects as go
     
-    cm = confusion_matrix(df_eval['target'], df_eval['predicted_outage'])
+    cm = confusion_matrix(y_true, y_pred)
     
     # Create annotated heatmap
     fig = go.Figure(data=go.Heatmap(
@@ -259,8 +288,13 @@ def show_model_performance(db):
     st.plotly_chart(fig, use_container_width=True)
     
     # Probability distribution
+    df_prob = pd.DataFrame({
+        'outage_probability': y_prob,
+        'target': y_true
+    })
+    
     fig_prob = px.histogram(
-        df_eval,
+        df_prob,
         x='outage_probability',
         color='target',
         title="Predicted Probability Distribution",
@@ -269,3 +303,12 @@ def show_model_performance(db):
         nbins=50
     )
     st.plotly_chart(fig_prob, use_container_width=True)
+    
+    # Show sample predictions
+    st.markdown("### Sample Predictions")
+    sample_df = pd.DataFrame({
+        'Actual': y_true[:20],
+        'Predicted': y_pred[:20],
+        'Probability': y_prob[:20]
+    })
+    st.dataframe(sample_df, use_container_width=True)
