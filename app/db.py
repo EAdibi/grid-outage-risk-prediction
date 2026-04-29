@@ -4,11 +4,12 @@ from dotenv import load_dotenv
 from pathlib import Path
 import ssl
 import certifi
+import streamlit as st
 
 load_dotenv(Path(__file__).parent / ".env")
 
 
-def get_db():
+def get_db(use_cache_fallback=True):
     """
     Connect to MongoDB Atlas using credentials from .env file
     Each team member can use their own credentials
@@ -57,12 +58,41 @@ def get_db():
             db = client[mongo_database]
             return db
         except:
+            # Try cache fallback if enabled
+            if use_cache_fallback:
+                st.warning("⚠️ **MongoDB Unreachable** - Using cached data instead")
+                st.info(
+                    "**Why?** Your IP address may not be whitelisted in MongoDB Atlas.\n\n"
+                    "**To fix:**\n"
+                    "1. Go to MongoDB Atlas → Network Access\n"
+                    "2. Add your current IP address\n"
+                    "3. Or add `0.0.0.0/0` to allow all IPs (less secure)\n\n"
+                    "**For now:** Dashboard will use cached data (may be outdated)"
+                )
+                
+                try:
+                    from cache_manager import get_cached_db, is_cache_valid
+                    
+                    # Check if cache is available
+                    if is_cache_valid('training_data'):
+                        return get_cached_db()
+                    else:
+                        st.error(
+                            "❌ **No cached data available**\n\n"
+                            "Please connect to MongoDB at least once to cache data:\n"
+                            "1. Whitelist your IP in MongoDB Atlas\n"
+                            "2. Run: `python scripts/cache_data.py`"
+                        )
+                        raise Exception("No cached data available and MongoDB unreachable")
+                except ImportError:
+                    pass
+            
             # Re-raise original error with helpful message
             raise Exception(
                 f"MongoDB connection failed: {str(e)}\n\n"
                 "Possible solutions:\n"
-                "1. Install certifi: pip install certifi\n"
+                "1. Whitelist your IP in MongoDB Atlas (Network Access)\n"
                 "2. Check your credentials in app/.env\n"
-                "3. Verify IP is whitelisted in MongoDB Atlas\n"
+                "3. Install certifi: pip install certifi\n"
                 "4. Try: pip install --upgrade pymongo certifi"
             )

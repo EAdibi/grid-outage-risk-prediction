@@ -4,11 +4,19 @@ app/.env
 .venv/
 venv/
 
+# Cache
+cache/
+*.pkl
+
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.egg-info/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
 
 # Data & Models
 models/*.pkl
