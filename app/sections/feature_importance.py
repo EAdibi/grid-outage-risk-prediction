@@ -51,34 +51,37 @@ def show_correlation_analysis(db):
     
     # Load sample data
     with st.spinner("Loading data from MongoDB..."):
-        # Get outages with weather and population data
+        # Get outages - aggregate by county
         pipeline = [
-            {"$match": {"location.county_fips": {"$ne": None}}},
-            {"$sample": {"size": 10000}},
-            {"$project": {
-                "county_fips": "$location.county_fips",
-                "max_customers": 1,
-                "duration_hours": 1,
-                "event_type": 1,
-                "month": {"$month": "$event_began"}
-            }}
+            {"$match": {"location.county_fips": {"$ne": None}, "max_customers": {"$ne": None}}},
+            {"$group": {
+                "_id": "$location.county_fips",
+                "outage_count": {"$sum": 1},
+                "avg_customers": {"$avg": "$max_customers"},
+                "max_customers": {"$max": "$max_customers"},
+                "avg_duration": {"$avg": "$duration_hours"},
+                "total_customers": {"$sum": "$max_customers"}
+            }},
+            {"$limit": 2000}
         ]
-        outages = list(db.outages.aggregate(pipeline))
+        outages_agg = list(db.outages.aggregate(pipeline))
         
-        if not outages:
+        if not outages_agg:
             st.error("No outage data found")
             return
         
-        df_outages = pd.DataFrame(outages)
+        df_outages = pd.DataFrame(outages_agg)
+        df_outages.rename(columns={"_id": "county_fips"}, inplace=True)
         
-        # Get weather data
+        # Get weather data by county
         weather_pipeline = [
             {"$match": {"location.county_fips": {"$ne": None}}},
             {"$group": {
                 "_id": "$location.county_fips",
                 "weather_event_count": {"$sum": 1},
                 "avg_damage": {"$avg": "$damage_property"},
-                "total_injuries": {"$sum": "$injuries"}
+                "total_injuries": {"$sum": "$injuries"},
+                "total_deaths": {"$sum": "$deaths"}
             }}
         ]
         weather_agg = list(db.storm_events.aggregate(weather_pipeline))
@@ -92,18 +95,28 @@ def show_correlation_analysis(db):
     # Merge data
     df_merged = df_outages.merge(df_weather, on="county_fips", how="left")
     df_merged = df_merged.merge(df_pop, on="county_fips", how="left")
-    df_merged = df_merged.fillna(0)
     
-    # Calculate correlations with outage occurrence
-    numeric_cols = ['max_customers', 'duration_hours', 'month', 'weather_event_count', 
-                    'avg_damage', 'total_injuries', 'latest_population']
-    
-    correlations = []
+    # Fill NaN with 0 for numeric columns only
+    numeric_cols = ['weather_event_count', 'avg_damage', 'total_injuries', 'total_deaths', 'latest_population']
     for col in numeric_cols:
         if col in df_merged.columns:
-            # Create binary target (outage occurred)
-            corr = df_merged[col].corr(df_merged['max_customers'] > 0)
-            correlations.append({'Feature': col, 'Correlation': abs(corr)})
+            df_merged[col] = df_merged[col].fillna(0)
+    
+    # Calculate correlations with outage count
+    feature_cols = ['avg_customers', 'avg_duration', 'weather_event_count', 
+                    'avg_damage', 'total_injuries', 'total_deaths', 'latest_population']
+    
+    correlations = []
+    for col in feature_cols:
+        if col in df_merged.columns and df_merged[col].notna().sum() > 0:
+            # Calculate correlation with outage count
+            corr = df_merged[col].corr(df_merged['outage_count'])
+            if not pd.isna(corr):
+                correlations.append({'Feature': col, 'Correlation': abs(corr)})
+    
+    if not correlations:
+        st.warning("Not enough data to calculate correlations")
+        return
     
     df_corr = pd.DataFrame(correlations).sort_values('Correlation', ascending=False)
     
@@ -124,9 +137,9 @@ def show_correlation_analysis(db):
         st.plotly_chart(fig, use_container_width=True)
     
     with col2:
-        st.metric("Total Outages Analyzed", f"{len(df_outages):,}")
-        st.metric("Counties Covered", f"{df_outages['county_fips'].nunique():,}")
-        st.metric("Avg Customers Affected", f"{df_outages['max_customers'].mean():,.0f}")
+        st.metric("Counties Analyzed", f"{len(df_outages):,}")
+        st.metric("Total Outages", f"{df_outages['outage_count'].sum():,.0f}")
+        st.metric("Avg Customers/Outage", f"{df_outages['avg_customers'].mean():,.0f}")
         
         st.markdown("**Top Correlating Factors:**")
         for idx, row in df_corr.head(5).iterrows():

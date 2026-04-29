@@ -104,7 +104,7 @@ def show_state_comparison(db):
         title=f"Outage Trends: {state1} vs {state2}",
         labels={'count': 'Number of Outages', 'date': 'Month'}
     )
-    fig.update_xaxis(tickangle=45)
+    fig.update_layout(xaxis_tickangle=45)
     st.plotly_chart(fig, use_container_width=True)
     
     # Event type breakdown
@@ -225,7 +225,7 @@ def show_event_type_comparison(db):
         color='count',
         color_continuous_scale='Reds'
     )
-    fig1.update_xaxis(tickangle=45)
+    fig1.update_layout(xaxis_tickangle=45)
     st.plotly_chart(fig1, use_container_width=True)
     
     # Impact comparison
@@ -241,7 +241,7 @@ def show_event_type_comparison(db):
             color='avg_customers',
             color_continuous_scale='Blues'
         )
-        fig2.update_xaxis(tickangle=45)
+        fig2.update_layout(xaxis_tickangle=45)
         st.plotly_chart(fig2, use_container_width=True)
     
     with col2:
@@ -254,7 +254,7 @@ def show_event_type_comparison(db):
             color='avg_duration',
             color_continuous_scale='Greens'
         )
-        fig3.update_xaxis(tickangle=45)
+        fig3.update_layout(xaxis_tickangle=45)
         st.plotly_chart(fig3, use_container_width=True)
 
 

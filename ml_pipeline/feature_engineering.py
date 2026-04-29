@@ -200,6 +200,9 @@ print(f"   Target distribution: {y.value_counts().to_dict()}\n")
 print("💾 Step 12: Saving features to MongoDB...")
 features_df = pd.concat([metadata, X, y], axis=1)
 
+# Convert date to datetime for MongoDB compatibility
+features_df['date'] = pd.to_datetime(features_df['date'])
+
 # Convert to records and save
 records = features_df.to_dict('records')
 db.training_data.delete_many({})  # Clear existing
