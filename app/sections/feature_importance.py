@@ -234,16 +234,27 @@ def show_model_performance(db):
     
     # Confusion matrix
     from sklearn.metrics import confusion_matrix
+    import plotly.graph_objects as go
+    
     cm = confusion_matrix(df_eval['target'], df_eval['predicted_outage'])
     
-    fig = px.imshow(
-        cm,
-        labels=dict(x="Predicted", y="Actual", color="Count"),
+    # Create annotated heatmap
+    fig = go.Figure(data=go.Heatmap(
+        z=cm,
         x=['No Outage', 'Outage'],
         y=['No Outage', 'Outage'],
+        colorscale='Blues',
+        text=cm,
+        texttemplate='%{text}',
+        textfont={"size": 16},
+        hoverongaps=False
+    ))
+    
+    fig.update_layout(
         title="Confusion Matrix",
-        color_continuous_scale='Blues',
-        text_auto=True
+        xaxis_title="Predicted",
+        yaxis_title="Actual",
+        height=400
     )
     st.plotly_chart(fig, use_container_width=True)
     
@@ -257,4 +268,4 @@ def show_model_performance(db):
         barmode='overlay',
         nbins=50
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig_prob, use_container_width=True)
