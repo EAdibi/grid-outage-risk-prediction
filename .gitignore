@@ -1,5 +1,39 @@
+# Environment
 .env
-__pycache__/
-*.pyc
-project.md
+app/.env
 .venv/
+venv/
+
+# Cache
+cache/
+*.pkl
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Data & Models
+models/*.pkl
+models/*.joblib
+features/*.parquet
+data/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Project specific
+project.md
