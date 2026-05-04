@@ -5,6 +5,7 @@ returns a `pd.DataFrame` with a documented column set, and is wrapped in
 `@st.cache_data` so Streamlit doesn't re-query Atlas on every interaction.
 """
 from datetime import datetime
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -75,7 +76,8 @@ def state_list() -> list[str]:
 
 
 @st.cache_data(ttl=600)
-def latest_predictions(week_start: datetime | None = None) -> pd.DataFrame:
+# def latest_predictions(week_start: datetime | None = None) -> pd.DataFrame: # works only for Python 3.10+
+def latest_predictions(week_start: Optional[datetime] = None) -> pd.DataFrame: # for Python 3.9
     """Predictions from the `predictions` collection.
 
     Returns rows for the given `week_start`, or for the most recent week if None.
@@ -121,3 +123,76 @@ def feature_importances(model_version: str = "rf_v1") -> pd.DataFrame:
         sorted(items.items(), key=lambda kv: kv[1], reverse=True),
         columns=["feature", "importance"],
     )
+
+
+@st.cache_data(ttl=600)
+def early_warning_predictions() -> pd.DataFrame:
+    """Latest next-window outage probabilities for the warning dashboard.
+
+    Uses the separate `early_warning_predictions` collection written by
+    `early_warning_model_training.py`. It does not read or modify the existing
+    daily model's `predictions` collection.
+
+    Columns: county_fips, county_name, state, prediction_time, window_hours,
+    outage_probability, predicted_outage, risk_level, model_used
+    """
+    db = get_db()
+    rows = list(db.early_warning_predictions.find({}, {
+        "county_fips": 1,
+        "county_name": 1,
+        "state": 1,
+        "prediction_time": 1,
+        "window_hours": 1,
+        "outage_probability": 1,
+        "predicted_outage": 1,
+        "risk_level": 1,
+        "model_used": 1,
+    }))
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "county_fips", "county_name", "state", "prediction_time",
+            "window_hours", "outage_probability", "predicted_outage",
+            "risk_level", "model_used",
+        ])
+
+    df["county_fips"] = df["county_fips"].astype(str).str.zfill(5)
+    df["prediction_time"] = pd.to_datetime(df["prediction_time"], errors="coerce")
+    df = df.sort_values("prediction_time").drop_duplicates(
+        ["county_fips", "window_hours"],
+        keep="last",
+    )
+
+    return df[[
+        "county_fips", "county_name", "state", "prediction_time",
+        "window_hours", "outage_probability", "predicted_outage",
+        "risk_level", "model_used",
+    ]]
+
+
+@st.cache_data(ttl=600)
+def warning_probability_history() -> pd.DataFrame:
+    """Early Warning probability history by county/window for the line chart."""
+    db = get_db()
+    rows = list(db.early_warning_predictions.find({}, {
+        "county_fips": 1,
+        "county_name": 1,
+        "state": 1,
+        "prediction_time": 1,
+        "window_hours": 1,
+        "outage_probability": 1,
+        "model_used": 1,
+    }))
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "county_fips", "county_name", "state", "prediction_time",
+            "window_hours", "outage_probability", "model_used",
+        ])
+
+    df["county_fips"] = df["county_fips"].astype(str).str.zfill(5)
+
+    return df[[
+        "county_fips", "county_name", "state", "prediction_time",
+        "window_hours", "outage_probability", "model_used",
+    ]]
