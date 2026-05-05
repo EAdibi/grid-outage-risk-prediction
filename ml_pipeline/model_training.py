@@ -25,22 +25,44 @@ print("=" * 70)
 print("MODEL TRAINING FOR OUTAGE PREDICTION")
 print("=" * 70)
 
-# Step 1: Load features from MongoDB
-print("\n📊 Step 1: Loading features from MongoDB...")
-db = get_db()
-training_data = list(db.training_data.find())
-print(f"   Loaded {len(training_data):,} records\n")
-
-# Convert to DataFrame
-df = pd.DataFrame(training_data)
+# Step 1: Load features from MongoDB or local cache
+print("📊 Step 1: Loading features from MongoDB...")
+try:
+    db = get_db()
+    training_data = list(db.training_data.find())
+    if len(training_data) == 0:
+        raise Exception("MongoDB returned 0 records")
+    print(f"   Loaded {len(training_data):,} records from MongoDB\n")
+    df = pd.DataFrame(training_data)
+except Exception as e:
+    print(f"   ⚠️  MongoDB failed or empty: {e}")
+    print(f"   📦 Loading from local cache...")
+    import pickle
+    cache_file = Path(__file__).parent.parent / "cache" / "training_data_enhanced.pkl"
+    with open(cache_file, 'rb') as f:
+        training_data = pickle.load(f)
+    print(f"   ✅ Loaded {len(training_data):,} records from cache\n")
+    df = pd.DataFrame(training_data)
 
 # Step 2: Prepare features and target
 print("🎯 Step 2: Preparing features and target...")
 feature_cols = [
+    # Temporal (base)
     'year', 'month', 'day_of_week', 'day_of_year', 'is_weekend', 'season',
+    # Historical (base)
     'avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages',
+    # Weather (base)
     'weather_event_count', 'total_property_damage', 'avg_magnitude', 'total_injuries', 'total_deaths',
-    'latest_population'
+    # Demographics (base)
+    'latest_population',
+    # Interaction features (new)
+    'weather_x_population', 'damage_per_capita', 'customers_per_outage', 'severity_score',
+    # Temporal patterns (new)
+    'is_summer', 'is_winter', 'is_storm_season', 'quarter',
+    # Risk indicators (new)
+    'high_risk_county', 'extreme_weather', 'high_population_density',
+    # Polynomial features (new)
+    'outages_squared', 'population_log', 'damage_log'
 ]
 
 X = df[feature_cols]

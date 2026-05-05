@@ -175,17 +175,61 @@ grid = grid.merge(df_population[['county_fips', 'latest_population']],
 grid['latest_population'] = grid['latest_population'].fillna(grid['latest_population'].median())
 print("   ✅ Demographics added\n")
 
-# Step 11: Final feature selection
-print("🎯 Step 11: Final feature selection...")
+# Step 11: Create Enhanced Features
+print("🎯 Step 11: Creating enhanced features...")
+
+# 11.1 Interaction Features (capture relationships)
+print("   11.1 Interaction features...")
+grid['weather_x_population'] = grid['weather_event_count'] * grid['latest_population'] / 100000
+grid['damage_per_capita'] = grid['total_property_damage'] / (grid['latest_population'] + 1)
+grid['customers_per_outage'] = grid['avg_customers_affected'] / (grid['total_historical_outages'] + 1)
+grid['severity_score'] = (
+    grid['avg_magnitude'] * 
+    grid['weather_event_count'] * 
+    (grid['total_injuries'] + grid['total_deaths'] + 1)
+)
+
+# 11.2 Temporal Pattern Features
+print("   11.2 Temporal pattern features...")
+grid['is_summer'] = grid['season'].isin([2]).astype(int)  # Summer (season 2)
+grid['is_winter'] = grid['season'].isin([4]).astype(int)  # Winter (season 4)
+grid['is_storm_season'] = grid['month'].isin([6, 7, 8, 9]).astype(int)  # Jun-Sep hurricane season
+grid['quarter'] = ((grid['month'] - 1) // 3) + 1
+
+# 11.3 Risk Indicator Features
+print("   11.3 Risk indicator features...")
+grid['high_risk_county'] = (grid['total_historical_outages'] > grid['total_historical_outages'].quantile(0.75)).astype(int)
+grid['extreme_weather'] = (grid['weather_event_count'] > 0).astype(int)
+grid['high_population_density'] = (grid['latest_population'] > grid['latest_population'].quantile(0.75)).astype(int)
+
+# 11.4 Polynomial Features (non-linear relationships)
+print("   11.4 Polynomial features...")
+grid['outages_squared'] = grid['total_historical_outages'] ** 2
+grid['population_log'] = np.log1p(grid['latest_population'])
+grid['damage_log'] = np.log1p(grid['total_property_damage'])
+
+print(f"   ✅ Enhanced features created\n")
+
+# Step 12: Final Feature Selection
+print("🎯 Step 12: Final feature selection...")
+
 feature_cols = [
-    # Temporal
+    # Temporal (base)
     'year', 'month', 'day_of_week', 'day_of_year', 'is_weekend', 'season',
-    # Historical
+    # Historical (base)
     'avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages',
-    # Weather
+    # Weather (base)
     'weather_event_count', 'total_property_damage', 'avg_magnitude', 'total_injuries', 'total_deaths',
-    # Demographics
-    'latest_population'
+    # Demographics (base)
+    'latest_population',
+    # Interaction features (new)
+    'weather_x_population', 'damage_per_capita', 'customers_per_outage', 'severity_score',
+    # Temporal patterns (new)
+    'is_summer', 'is_winter', 'is_storm_season', 'quarter',
+    # Risk indicators (new)
+    'high_risk_county', 'extreme_weather', 'high_population_density',
+    # Polynomial features (new)
+    'outages_squared', 'population_log', 'damage_log'
 ]
 
 X = grid[feature_cols]
@@ -196,22 +240,34 @@ print(f"   Features: {len(feature_cols)}")
 print(f"   Samples: {len(X):,}")
 print(f"   Target distribution: {y.value_counts().to_dict()}\n")
 
-# Step 12: Save to MongoDB
-print("💾 Step 12: Saving features to MongoDB...")
+# Step 13: Save to MongoDB and local backup
+print("💾 Step 13: Saving features to MongoDB and local backup...")
 features_df = pd.concat([metadata, X, y], axis=1)
 
 # Convert date to datetime for MongoDB compatibility
 features_df['date'] = pd.to_datetime(features_df['date'])
 
-# Convert to records and save
-records = features_df.to_dict('records')
-db.training_data.delete_many({})  # Clear existing
-db.training_data.insert_many(records)
+# Save to local pickle as backup
+import pickle
+from pathlib import Path
+cache_dir = Path(__file__).parent.parent / "cache"
+cache_dir.mkdir(exist_ok=True)
+with open(cache_dir / "training_data_enhanced.pkl", 'wb') as f:
+    pickle.dump(features_df.to_dict('records'), f)
+print(f"   ✅ Saved {len(features_df):,} records to local cache (backup)")
 
-print(f"   ✅ Saved {len(records):,} records to 'training_data' collection\n")
+# Try to save to MongoDB
+try:
+    records = features_df.to_dict('records')
+    db.training_data.delete_many({})  # Clear existing
+    db.training_data.insert_many(records)
+    print(f"   ✅ Saved {len(records):,} records to MongoDB 'training_data' collection\n")
+except Exception as e:
+    print(f"   ⚠️  MongoDB save failed: {e}")
+    print(f"   ✅ Using local cache instead\n")
 
-# Step 13: Feature statistics
-print("📊 Step 13: Feature Statistics")
+# Step 14: Feature Statistics
+print("📊 Step 14: Feature Statistics")
 print("=" * 70)
 for col in feature_cols:
     print(f"{col:30s} | Mean: {X[col].mean():10.2f} | Std: {X[col].std():10.2f} | Min: {X[col].min():10.2f} | Max: {X[col].max():10.2f}")
