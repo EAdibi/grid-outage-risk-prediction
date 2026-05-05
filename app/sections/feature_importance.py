@@ -9,6 +9,7 @@ from db import get_db
 TITLE = "Feature Importance Analysis"
 ICON = "🔍"
 ORDER = 4
+SECTION = "AI Analysis"
 
 
 def show():

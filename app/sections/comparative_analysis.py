@@ -9,6 +9,7 @@ from datetime import datetime
 TITLE = "Comparative Analysis"
 ICON = "⚖️"
 ORDER = 5
+SECTION = "AI Analysis"
 
 
 def show():

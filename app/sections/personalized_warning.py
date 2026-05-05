@@ -12,6 +12,7 @@ from data import early_warning_predictions
 TITLE = "Personalized Warning"
 ICON = "📣"
 ORDER = 7
+SECTION = "AI Analysis"
 
 
 def _risk_label(probability: float) -> str:
