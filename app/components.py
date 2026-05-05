@@ -1,26 +1,52 @@
-"""Reusable UI widgets and chart wrappers.
+from contextlib import contextmanager
 
-Sections should compose from these so the dashboard has a consistent look.
-"""
-from __future__ import annotations
-
-import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-COUNTIES_GEOJSON = (
-    "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
-)
+
+COUNTIES_GEOJSON = "https://raw.githubusercontent.com/plotly/datasets/master/geojson-counties-fips.json"
 
 
-def section_header(title: str, subtitle: str | None = None) -> None:
+def section_header(title, subtitle=None):
     st.header(title)
     if subtitle:
         st.markdown(subtitle)
 
 
-def metric_row(metrics: dict[str, str | int | float]) -> None:
-    """Render a row of KPI tiles. `metrics` maps label → value."""
+@contextmanager
+def loading(label="Loading..."):
+    placeholder = st.empty()
+    placeholder.markdown(
+        f"""
+        <style>
+        .grid-loader {{
+          display: flex; flex-direction: column;
+          align-items: center; gap: 16px;
+          padding: 60px 0;
+        }}
+        .grid-loader__spinner {{
+          width: 56px; height: 56px; border-radius: 50%;
+          border: 5px solid rgba(255, 75, 75, 0.18);
+          border-top-color: #ff4b4b;
+          animation: grid-loader-spin 0.9s linear infinite;
+        }}
+        .grid-loader__label {{ font-size: 0.95rem; opacity: 0.75; }}
+        @keyframes grid-loader-spin {{ to {{ transform: rotate(360deg); }} }}
+        </style>
+        <div class="grid-loader">
+          <div class="grid-loader__spinner"></div>
+          <div class="grid-loader__label">{label}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    try:
+        yield
+    finally:
+        placeholder.empty()
+
+
+def metric_row(metrics):
     if not metrics:
         return
     cols = st.columns(len(metrics))
@@ -28,23 +54,14 @@ def metric_row(metrics: dict[str, str | int | float]) -> None:
         col.metric(label, value)
 
 
-def state_filter(default: str = "ALL", key: str | None = None) -> str:
-    """Sidebar dropdown of states. Returns the selected state or 'ALL'."""
+def state_filter(default="ALL", key=None):
     from data import state_list
-
     options = ["ALL"] + state_list()
-    index = options.index(default) if default in options else 0
-    return st.sidebar.selectbox("State filter", options, index=index, key=key)
+    idx = options.index(default) if default in options else 0
+    return st.sidebar.selectbox("State filter", options, index=idx, key=key)
 
 
-def county_choropleth(
-    df: pd.DataFrame,
-    value_col: str,
-    title: str | None = None,
-    color_scale: str = "Reds",
-    fips_col: str = "county_fips",
-):
-    """Plotly county-level choropleth keyed by 5-digit FIPS."""
+def county_choropleth(df, value_col, title=None, color_scale="Reds", fips_col="county_fips"):
     fig = px.choropleth(
         df,
         geojson=COUNTIES_GEOJSON,

@@ -1,9 +1,3 @@
-"""Cached query helpers — the only module that talks to MongoDB collections.
-
-Sections should import from here, not call pymongo directly. Every helper
-returns a `pd.DataFrame` with a documented column set, and is wrapped in
-`@st.cache_data` so Streamlit doesn't re-query Atlas on every interaction.
-"""
 from datetime import datetime
 from typing import Optional
 
@@ -14,11 +8,7 @@ from db import get_db
 
 
 @st.cache_data(ttl=3600)
-def outages_by_county() -> pd.DataFrame:
-    """Outage counts per county across all years.
-
-    Columns: county_fips, county_name, state, outage_count
-    """
+def outages_by_county():
     db = get_db()
     pipeline = [
         {"$match": {"location.county_fips": {"$exists": True, "$ne": None}}},
@@ -38,12 +28,28 @@ def outages_by_county() -> pd.DataFrame:
     } for r in rows])
 
 
-@st.cache_data(ttl=3600)
-def texas_2021_outages() -> pd.DataFrame:
-    """Texas outages during the Feb 2021 winter storm.
+OUTAGES_BY_COUNTY_SQL = """
+SELECT
+    county_fips,
+    FIRST(county_name) AS county_name,
+    FIRST(state)       AS state,
+    COUNT(*)           AS outage_count
+FROM outages
+GROUP BY county_fips
+""".strip()
 
-    Columns: county, county_fips, max_customers, duration_hours, start_time
-    """
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def outages_by_county_spark():
+    from spark import get_spark
+    from spark_data import outages_df
+    spark = get_spark()
+    outages_df()
+    return spark.sql(OUTAGES_BY_COUNTY_SQL).toPandas()
+
+
+@st.cache_data(ttl=3600)
+def texas_2021_outages():
     db = get_db()
     rows = list(db.outages.find({
         "location.state": "Texas",
@@ -68,24 +74,14 @@ def texas_2021_outages() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600)
-def state_list() -> list[str]:
-    """Distinct states present in the outages collection (sorted)."""
+def state_list():
     db = get_db()
     states = db.outages.distinct("location.state")
     return sorted(s for s in states if s)
 
 
 @st.cache_data(ttl=600)
-# def latest_predictions(week_start: datetime | None = None) -> pd.DataFrame: # works only for Python 3.10+
-def latest_predictions(week_start: Optional[datetime] = None) -> pd.DataFrame: # for Python 3.9
-    """Predictions from the `predictions` collection.
-
-    Returns rows for the given `week_start`, or for the most recent week if None.
-    Columns: county_fips, state, week_start, risk_score, risk_level, top_factors
-
-    The `predictions` collection is populated by Phase 2 (Spark MLlib). Returns
-    an empty DataFrame until that pipeline runs.
-    """
+def latest_predictions(week_start: Optional[datetime] = None):
     db = get_db()
     if week_start is None:
         latest = db.predictions.find_one(sort=[("week_start", -1)])
@@ -107,12 +103,7 @@ def latest_predictions(week_start: Optional[datetime] = None) -> pd.DataFrame: #
 
 
 @st.cache_data(ttl=3600)
-def feature_importances(model_version: str = "rf_v1") -> pd.DataFrame:
-    """Feature importances for a trained model.
-
-    Columns: feature, importance
-    Empty until the model pipeline writes a `model_metadata` document.
-    """
+def feature_importances(model_version="rf_v1"):
     db = get_db()
     doc = db.model_metadata.find_one({"model_version": model_version}) \
         if "model_metadata" in db.list_collection_names() else None

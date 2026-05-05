@@ -1,15 +1,8 @@
-"""Dashboard entrypoint.
-
-Auto-discovers any `sections/*.py` that exports `show()` and builds the
-sidebar from the modules' TITLE / ICON / ORDER metadata. Add a page by
-dropping a new file in `sections/` — no edits here are needed.
-"""
 import importlib
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
 
 import streamlit as st
+
 
 st.set_page_config(
     page_title="U.S. Power Grid Outage Risk",
@@ -17,45 +10,56 @@ st.set_page_config(
     layout="wide",
 )
 
-
-@dataclass
-class Page:
-    title: str
-    icon: str
-    order: int
-    show: Callable[[], None]
+SECTION_ORDER = ["Live Analysis", "AI Analysis"]
 
 
-def _discover_pages() -> list[Page]:
-    sections_dir = Path(__file__).parent / "sections"
-    pages: list[Page] = []
-    for path in sorted(sections_dir.glob("*.py")):
-        if path.stem.startswith("_") or path.stem == "__init__":
+def discover_pages():
+    here = Path(__file__).parent / "sections"
+    pages = []
+    for path in sorted(here.glob("*.py")):
+        if path.stem.startswith("_"):
             continue
-        module = importlib.import_module(f"sections.{path.stem}")
-        show = getattr(module, "show", None)
-        if not callable(show):
+        mod = importlib.import_module(f"sections.{path.stem}")
+        if not hasattr(mod, "show"):
             continue
-        pages.append(Page(
-            title=getattr(module, "TITLE", path.stem),
-            icon=getattr(module, "ICON", "•"),
-            order=getattr(module, "ORDER", 999),
-            show=show,
-        ))
-    pages.sort(key=lambda p: (p.order, p.title))
+        pages.append({
+            "title": getattr(mod, "TITLE", path.stem),
+            "icon": getattr(mod, "ICON", "•"),
+            "order": getattr(mod, "ORDER", 999),
+            "section": getattr(mod, "SECTION", "Other"),
+            "show": mod.show,
+        })
+    pages.sort(key=lambda p: (p["order"], p["title"]))
     return pages
 
 
-pages = _discover_pages()
-
-st.title("⚡ U.S. Power Grid Outage Risk Intelligence Platform")
-st.markdown("Predicting county-level outage risk across all 50 states.")
-
-st.sidebar.title("Navigation")
+pages = discover_pages()
 if not pages:
-    st.sidebar.info("No sections found in `app/sections/`.")
+    st.error("No sections found in app/sections/.")
     st.stop()
 
-labels = [f"{p.icon}  {p.title}" for p in pages]
-choice = st.sidebar.radio("Go to", labels, label_visibility="collapsed")
-pages[labels.index(choice)].show()
+groups = {s: [] for s in SECTION_ORDER}
+for p in pages:
+    groups.setdefault(p["section"], []).append(p)
+
+if "active" not in st.session_state:
+    st.session_state.active = pages[0]["title"]
+
+st.sidebar.title("⚡ Outage Risk")
+for section, items in groups.items():
+    if not items:
+        continue
+    st.sidebar.markdown(f"#### {section}")
+    for p in items:
+        active = p["title"] == st.session_state.active
+        if st.sidebar.button(
+            f"{p['icon']}  {p['title']}",
+            key=f"nav_{p['title']}",
+            type="primary" if active else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state.active = p["title"]
+            st.rerun()
+
+current = next(p for p in pages if p["title"] == st.session_state.active)
+current["show"]()

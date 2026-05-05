@@ -10,6 +10,7 @@ from data import early_warning_predictions, state_list, warning_probability_hist
 TITLE = "Early Warning"
 ICON = "🚨"
 ORDER = 6
+SECTION = "AI Analysis"
 
 
 def _risk_label(probability: float) -> str:

@@ -7,17 +7,13 @@ from data import texas_2021_outages
 TITLE = "Texas 2021 Case Study"
 ICON = "❄️"
 ORDER = 90
+SECTION = "AI Analysis"
 
 
-def show() -> None:
-    section_header(
-        TITLE,
-        "Actual outages recorded in Texas during the February 2021 winter storm.",
-    )
+def show():
+    section_header(TITLE, "Texas outages during the February 2021 winter storm.")
 
-    with st.spinner("Loading data..."):
-        df = texas_2021_outages()
-
+    df = texas_2021_outages()
     if df.empty:
         st.warning("No data found for Texas February 2021.")
         return
@@ -28,21 +24,22 @@ def show() -> None:
         "Peak customers affected": f"{int(df['max_customers'].max()):,}",
     })
 
-    top = df.groupby("county")["max_customers"].sum() \
-            .reset_index() \
-            .sort_values("max_customers", ascending=False) \
-            .head(15)
-
+    by_county = (
+        df.groupby("county")["max_customers"].sum()
+          .reset_index()
+          .sort_values("max_customers", ascending=False)
+          .head(15)
+    )
     fig = px.bar(
-        top,
+        by_county,
         x="county",
         y="max_customers",
-        title="Customers Affected by County — Texas Feb 2021",
-        labels={"max_customers": "Max Customers Affected", "county": "County"},
+        title="Customers affected by county, Texas Feb 2021",
+        labels={"max_customers": "Max customers affected", "county": "County"},
         color="max_customers",
         color_continuous_scale="Reds",
     )
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Raw Data")
+    st.subheader("Raw data")
     st.dataframe(df, use_container_width=True)
