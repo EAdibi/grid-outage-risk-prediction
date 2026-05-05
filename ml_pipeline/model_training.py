@@ -69,20 +69,31 @@ print(f"   Test:  {len(X_test):,} samples ({len(X_test)/len(X):.1%})")
 print(f"   Val:   {len(X_val):,} samples ({len(X_val)/len(X):.1%})")
 print(f"   Train class distribution: {y_train.value_counts().to_dict()}\n")
 
-# Step 3b: Handle Class Imbalance with SMOTE + Undersampling
-print("⚖️  Step 3b: Handling class imbalance with SMOTE...")
+# Step 3b: Handle Class Imbalance with Smart Sampling Strategy
+print("⚖️  Step 3b: Handling class imbalance with smart sampling...")
 print(f"   Original train distribution: 0={len(y_train[y_train==0]):,}, 1={len(y_train[y_train==1]):,}")
+print(f"   Original ratio: 1:{len(y_train[y_train==0]) / len(y_train[y_train==1]):.0f}")
 
-# Combine SMOTE (oversample minority) + RandomUnderSampler (undersample majority)
-# Target: 50/50 balance for better precision
-smote = SMOTE(sampling_strategy=1.0, random_state=42)  # Oversample to match majority
-under = RandomUnderSampler(sampling_strategy=1.0, random_state=42)  # Keep 50/50 balance
+# Strategy: First undersample majority to 1:10, then SMOTE minority to 1:3
+# This avoids creating too many synthetic samples (overfitting)
 
-X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
-X_train_balanced, y_train_balanced = under.fit_resample(X_train_balanced, y_train_balanced)
+# Step 1: Undersample majority class to 10x minority (1:10 ratio)
+n_minority = len(y_train[y_train==1])
+n_majority_target = n_minority * 10  # Target 10x minority
 
-print(f"   Balanced train distribution: 0={len(y_train_balanced[y_train_balanced==0]):,}, 1={len(y_train_balanced[y_train_balanced==1]):,}")
-print(f"   New class balance: {len(y_train_balanced[y_train_balanced==1])/len(y_train_balanced):.1%} positive\n")
+under = RandomUnderSampler(sampling_strategy={0: n_majority_target, 1: n_minority}, random_state=42)
+X_train_under, y_train_under = under.fit_resample(X_train, y_train)
+
+print(f"   After undersampling: 0={len(y_train_under[y_train_under==0]):,}, 1={len(y_train_under[y_train_under==1]):,}")
+print(f"   Ratio: 1:{len(y_train_under[y_train_under==0]) / len(y_train_under[y_train_under==1]):.1f}")
+
+# Step 2: SMOTE minority class to 1:3 ratio (less synthetic samples = less overfitting)
+smote = SMOTE(sampling_strategy=0.33, random_state=42)  # Minority will be 33% of majority (1:3)
+X_train_balanced, y_train_balanced = smote.fit_resample(X_train_under, y_train_under)
+
+print(f"   After SMOTE: 0={len(y_train_balanced[y_train_balanced==0]):,}, 1={len(y_train_balanced[y_train_balanced==1]):,}")
+print(f"   Final ratio: 1:{len(y_train_balanced[y_train_balanced==0]) / len(y_train_balanced[y_train_balanced==1]):.1f}")
+print(f"   Minority class: {len(y_train_balanced[y_train_balanced==1])/len(y_train_balanced):.1%} of total\n")
 
 # Step 4: Train Random Forest
 print("🌲 Step 4: Training Random Forest on balanced data...")
