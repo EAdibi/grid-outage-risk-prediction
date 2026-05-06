@@ -25,22 +25,44 @@ print("=" * 70)
 print("MODEL TRAINING FOR OUTAGE PREDICTION")
 print("=" * 70)
 
-# Step 1: Load features from MongoDB
-print("\n📊 Step 1: Loading features from MongoDB...")
-db = get_db()
-training_data = list(db.training_data.find())
-print(f"   Loaded {len(training_data):,} records\n")
-
-# Convert to DataFrame
-df = pd.DataFrame(training_data)
+# Step 1: Load features from MongoDB or local cache
+print("📊 Step 1: Loading features from MongoDB...")
+try:
+    db = get_db()
+    training_data = list(db.training_data.find())
+    if len(training_data) == 0:
+        raise Exception("MongoDB returned 0 records")
+    print(f"   Loaded {len(training_data):,} records from MongoDB\n")
+    df = pd.DataFrame(training_data)
+except Exception as e:
+    print(f"   ⚠️  MongoDB failed or empty: {e}")
+    print(f"   📦 Loading from local cache...")
+    import pickle
+    cache_file = Path(__file__).parent.parent / "cache" / "training_data_enhanced.pkl"
+    with open(cache_file, 'rb') as f:
+        training_data = pickle.load(f)
+    print(f"   ✅ Loaded {len(training_data):,} records from cache\n")
+    df = pd.DataFrame(training_data)
 
 # Step 2: Prepare features and target
 print("🎯 Step 2: Preparing features and target...")
 feature_cols = [
+    # Temporal (base)
     'year', 'month', 'day_of_week', 'day_of_year', 'is_weekend', 'season',
+    # Historical (base)
     'avg_customers_affected', 'max_customers_ever', 'avg_duration_hours', 'total_historical_outages',
+    # Weather (base)
     'weather_event_count', 'total_property_damage', 'avg_magnitude', 'total_injuries', 'total_deaths',
-    'latest_population'
+    # Demographics (base)
+    'latest_population',
+    # Interaction features (new)
+    'weather_x_population', 'damage_per_capita', 'customers_per_outage', 'severity_score',
+    # Temporal patterns (new)
+    'is_summer', 'is_winter', 'is_storm_season', 'quarter',
+    # Risk indicators (new)
+    'high_risk_county', 'extreme_weather', 'high_population_density',
+    # Polynomial features (new)
+    'outages_squared', 'population_log', 'damage_log'
 ]
 
 X = df[feature_cols]
@@ -69,20 +91,31 @@ print(f"   Test:  {len(X_test):,} samples ({len(X_test)/len(X):.1%})")
 print(f"   Val:   {len(X_val):,} samples ({len(X_val)/len(X):.1%})")
 print(f"   Train class distribution: {y_train.value_counts().to_dict()}\n")
 
-# Step 3b: Handle Class Imbalance with SMOTE + Undersampling
-print("⚖️  Step 3b: Handling class imbalance with SMOTE...")
+# Step 3b: Handle Class Imbalance with Smart Sampling Strategy
+print("⚖️  Step 3b: Handling class imbalance with smart sampling...")
 print(f"   Original train distribution: 0={len(y_train[y_train==0]):,}, 1={len(y_train[y_train==1]):,}")
+print(f"   Original ratio: 1:{len(y_train[y_train==0]) / len(y_train[y_train==1]):.0f}")
 
-# Combine SMOTE (oversample minority) + RandomUnderSampler (undersample majority)
-# Target: 30% positive class (more balanced than original 1.5%)
-smote = SMOTE(sampling_strategy=0.3, random_state=42)  # Oversample to 30% of majority
-under = RandomUnderSampler(sampling_strategy=0.5, random_state=42)  # Then undersample to 50/50
+# Strategy: First undersample majority to 1:10, then SMOTE minority to 1:3
+# This avoids creating too many synthetic samples (overfitting)
 
-X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
-X_train_balanced, y_train_balanced = under.fit_resample(X_train_balanced, y_train_balanced)
+# Step 1: Undersample majority class to 10x minority (1:10 ratio)
+n_minority = len(y_train[y_train==1])
+n_majority_target = n_minority * 10  # Target 10x minority
 
-print(f"   Balanced train distribution: 0={len(y_train_balanced[y_train_balanced==0]):,}, 1={len(y_train_balanced[y_train_balanced==1]):,}")
-print(f"   New class balance: {len(y_train_balanced[y_train_balanced==1])/len(y_train_balanced):.1%} positive\n")
+under = RandomUnderSampler(sampling_strategy={0: n_majority_target, 1: n_minority}, random_state=42)
+X_train_under, y_train_under = under.fit_resample(X_train, y_train)
+
+print(f"   After undersampling: 0={len(y_train_under[y_train_under==0]):,}, 1={len(y_train_under[y_train_under==1]):,}")
+print(f"   Ratio: 1:{len(y_train_under[y_train_under==0]) / len(y_train_under[y_train_under==1]):.1f}")
+
+# Step 2: SMOTE minority class to 1:3 ratio (less synthetic samples = less overfitting)
+smote = SMOTE(sampling_strategy=0.33, random_state=42)  # Minority will be 33% of majority (1:3)
+X_train_balanced, y_train_balanced = smote.fit_resample(X_train_under, y_train_under)
+
+print(f"   After SMOTE: 0={len(y_train_balanced[y_train_balanced==0]):,}, 1={len(y_train_balanced[y_train_balanced==1]):,}")
+print(f"   Final ratio: 1:{len(y_train_balanced[y_train_balanced==0]) / len(y_train_balanced[y_train_balanced==1]):.1f}")
+print(f"   Minority class: {len(y_train_balanced[y_train_balanced==1])/len(y_train_balanced):.1%} of total\n")
 
 # Step 4: Train Random Forest
 print("🌲 Step 4: Training Random Forest on balanced data...")
